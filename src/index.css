@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+  .in {
+    @apply w-full border border-slate-200 rounded-lg px-2.5 py-2 text-[13px] outline-none bg-white;
+  }
+  .in:focus {
+    @apply border-emerald-500;
+    box-shadow: 0 0 0 3px #d1fae5;
+  }
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+}
+body {
+  margin: 0;
+  font-family: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont,
+    "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+  background-color: #f8fafc;
+}
