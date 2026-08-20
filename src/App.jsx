@@ -11,16 +11,18 @@ import * as XLSX from "xlsx";
 import { supabase } from "./supabaseClient.js";
 
 /* ═══════════════════════════════════════════════════════════
-   계정: foreon1 ~ foreon12 · 비밀번호 전부 "1234"
+   계정: foreon1 ~ foreon9 (골프장·피트니스 계정은 폐지)
    부서 배정 (필요하면 여기 숫자만 바꾸면 됩니다)
    ═══════════════════════════════════════════════════════════ */
 const DEPT_OF = {
   foreon1: "사무실", foreon2: "사무실", foreon3: "사무실", foreon4: "사무실", foreon5: "사무실",
   foreon6: "데스크", foreon7: "데스크", foreon8: "데스크", foreon9: "데스크",
-  foreon10: "골프장", foreon11: "골프장",
-  foreon12: "피트니스",
 };
-const DEFAULT_PW = "1234";
+/* 개인별 비밀번호 — 사무실: Office{번호}!26 (패턴형) / 데스크: 무작위(직원끼리 유추 방지) */
+const PW_OF = {
+  foreon1: "Office1!26", foreon2: "Office2!26", foreon3: "Office3!26", foreon4: "Office4!26", foreon5: "Office5!26",
+  foreon6: "xQ4#nZt8Bw", foreon7: "Lp9$rVq3Xm", foreon8: "Gk6&wTf1Qz", foreon9: "Rn2@Xy7Lqe",
+};
 const AI_ADMIN = "foreon4"; // AI 정리 · 매출 분석 사용 가능한 계정
 
 const 민원카테고리 = ["시설 고장", "이용 안내", "회원 접수", "결제·환불", "기타"];
@@ -174,7 +176,7 @@ export default function App() {
     { id: 2, time: "2026-08-13 10:05", cat: "결제·환불", dong: "210", ho: "2506", name: "이건혁", phone: "", content: "스크린골프 당일 취소 환불 문의", action: "1시간 전까지 앱 취소 시 전액 환불 안내", owner: "데스크", status: "완료", by: "foreon7", dept: "데스크", date: "2026-08-13" },
   ]);
   const [handovers, setHandovers] = useState([
-    { id: 1, type: "인계 메모", text: "내일 오전 스크린골프 3번기 A/S 방문 예정 (10시)", by: "foreon10", dept: "골프장", at: "2026-08-13 21:40" },
+    { id: 1, type: "인계 메모", text: "내일 오전 스크린골프 3번기 A/S 방문 예정 (10시)", by: "foreon6", dept: "데스크", at: "2026-08-13 21:40" },
   ]);
   const [requests, setRequests] = useState([
     { id: 1, text: "데스크 프린터 토너 교체 요청합니다.", officeOnly: true, by: "foreon6", dept: "데스크", date: "2026-08-13", replies: [] },
@@ -249,7 +251,7 @@ function Login({ onLogin }) {
   const [err, setErr] = useState("");
   const submit = () => {
     const key = id.trim().toLowerCase();
-    if (DEPT_OF[key] && pw === DEFAULT_PW) { setErr(""); onLogin({ id: key, dept: DEPT_OF[key] }); }
+    if (DEPT_OF[key] && pw === PW_OF[key]) { setErr(""); onLogin({ id: key, dept: DEPT_OF[key] }); }
     else setErr("아이디 또는 비밀번호가 올바르지 않습니다.");
   };
   return (
