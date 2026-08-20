@@ -2,7 +2,7 @@ import React, { useState, useMemo } from "react";
 import {
   LogIn, LogOut, Search, PackageSearch, ClipboardList, CalendarDays, Sparkles, BarChart3,
   Plus, X, User, Loader2, MessageSquareWarning, ArrowLeftRight, Inbox, Send, Upload,
-  CheckCircle2, Clock, FileText, GraduationCap, PlayCircle
+  CheckCircle2, Clock, FileText, GraduationCap, PlayCircle, Pencil, Trash2, Copy
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell
@@ -101,6 +101,25 @@ const nowLocal = () => {
   return d.toISOString().slice(0, 16);
 };
 const won = (n) => n.toLocaleString("ko-KR") + "원";
+const stamp = () => {
+  const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 16).replace("T", " ");
+};
+
+/* 수정·삭제 이력 표시 줄 */
+function AuditLine({ r }) {
+  const last = r.hist && r.hist.length ? r.hist[r.hist.length - 1] : null;
+  if (!last) return null;
+  return <p className="text-[11px] text-amber-600 mt-1 font-mono">✎ {last.at} {last.by} 수정{r.hist.length > 1 ? ` (총 ${r.hist.length}회)` : ""}</p>;
+}
+/* 삭제된 항목 표시 (소프트 삭제) */
+function DeletedCard({ r, label }) {
+  return (
+    <div className="bg-slate-50 rounded-xl border border-dashed border-slate-300 p-3 text-xs text-slate-400">
+      🗑 삭제된 {label} · <span className="font-mono">{r.deleted.at} {r.deleted.by}</span> 삭제함
+    </div>
+  );
+}
 
 export default function App() {
   const [me, setMe] = useState(null); // { id, dept }
@@ -266,14 +285,16 @@ function Complaints({ me, rows, setRows }) {
   const [v, setV] = useState(blank);
   const add = () => {
     if (!v.content.trim()) return;
-    setRows([{ id: Date.now(), ...v, time: v.time.replace("T", " "), by: me.id, dept: me.dept, date: today() }, ...rows]);
+    setRows([{ id: Date.now(), ...v, time: v.time.replace("T", " "), by: me.id, dept: me.dept, date: today(), hist: [], deleted: null }, ...rows]);
     setV(blank); setOpen(false);
   };
   const toggle = (id) => setRows(rows.map((r) => r.id === id ? { ...r, status: r.status === "완료" ? "진행 중" : "완료" } : r));
+  const saveEdit = (id, patch) => setRows(rows.map((r) => r.id === id ? { ...r, ...patch, hist: [...(r.hist || []), { by: me.id, at: stamp() }] } : r));
+  const del = (id) => { if (window.confirm("이 민원을 삭제할까요?")) setRows(rows.map((r) => r.id === id ? { ...r, deleted: { by: me.id, at: stamp() } } : r)); };
   return (
     <div>
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-base font-bold">민원 대장 <span className="text-slate-400 font-normal text-sm">({rows.length})</span></h2>
+        <h2 className="text-base font-bold">민원 대장 <span className="text-slate-400 font-normal text-sm">({rows.filter((r) => !r.deleted).length})</span></h2>
         <button onClick={() => setOpen(!open)} className="flex items-center gap-1 rounded-lg bg-slate-800 hover:bg-slate-900 text-white text-xs font-medium px-3 py-2"><Plus size={14} /> 민원 등록</button>
       </div>
       {open && (
@@ -298,14 +319,47 @@ function Complaints({ me, rows, setRows }) {
           <button onClick={add} className="w-full rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium py-2.5">등록</button>
         </div>
       )}
-      <div className="space-y-2">{rows.map((r) => <ComplaintCard key={r.id} r={r} onToggle={() => toggle(r.id)} />)}</div>
+      <div className="space-y-2">{rows.map((r) => r.deleted
+        ? <DeletedCard key={r.id} r={r} label="민원" />
+        : <ComplaintCard key={r.id} r={r} onToggle={() => toggle(r.id)} onSave={(patch) => saveEdit(r.id, patch)} onDelete={() => del(r.id)} />)}</div>
       <style>{`.in{width:100%;border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;font-size:13px;outline:none;background:#fff}
         .in:focus{border-color:#10b981;box-shadow:0 0 0 3px #d1fae5}`}</style>
     </div>
   );
 }
-function ComplaintCard({ r, onToggle }) {
+function ComplaintCard({ r, onToggle, onSave, onDelete }) {
   const done = r.status === "완료";
+  const editable = !!onSave;
+  const [edit, setEdit] = useState(false);
+  const [v, setV] = useState(r);
+  const start = () => { setV(r); setEdit(true); };
+  const save = () => { onSave({ cat: v.cat, dong: v.dong, ho: v.ho, name: v.name, phone: v.phone, content: v.content, action: v.action, owner: v.owner, status: v.status }); setEdit(false); };
+
+  if (edit) {
+    return (
+      <div className="bg-white rounded-xl border border-emerald-200 ring-2 ring-emerald-50 p-4 space-y-2.5">
+        <div className="flex items-center justify-between"><span className="text-sm font-semibold">민원 수정</span><button onClick={() => setEdit(false)} className="text-slate-400"><X size={16} /></button></div>
+        <div className="grid grid-cols-2 gap-2">
+          <select value={v.cat} onChange={(e) => setV({ ...v, cat: e.target.value })} className="ce">{민원카테고리.map((c) => <option key={c}>{c}</option>)}</select>
+          <select value={v.status} onChange={(e) => setV({ ...v, status: e.target.value })} className="ce"><option>진행 중</option><option>완료</option></select>
+        </div>
+        <div className="grid grid-cols-4 gap-2">
+          <input value={v.dong} onChange={(e) => setV({ ...v, dong: e.target.value })} placeholder="동" className="ce" />
+          <input value={v.ho} onChange={(e) => setV({ ...v, ho: e.target.value })} placeholder="호" className="ce" />
+          <input value={v.name} onChange={(e) => setV({ ...v, name: e.target.value })} placeholder="성함" className="ce" />
+          <input value={v.phone} onChange={(e) => setV({ ...v, phone: e.target.value })} placeholder="연락처" className="ce" />
+        </div>
+        <textarea rows={2} value={v.content} onChange={(e) => setV({ ...v, content: e.target.value })} placeholder="발생 내용" className="ce resize-none" />
+        <textarea rows={2} value={v.action} onChange={(e) => setV({ ...v, action: e.target.value })} placeholder="조치 사항" className="ce resize-none" />
+        <select value={v.owner} onChange={(e) => setV({ ...v, owner: e.target.value })} className="ce">{담당부서.map((c) => <option key={c}>{c}</option>)}</select>
+        <div className="flex gap-2">
+          <button onClick={save} className="flex-1 rounded-lg bg-emerald-600 text-white text-sm font-medium py-2">저장</button>
+          <button onClick={() => setEdit(false)} className="px-4 rounded-lg border border-slate-200 text-sm text-slate-500">취소</button>
+        </div>
+        <style>{`.ce{width:100%;border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;font-size:13px;outline:none;background:#fff}.ce:focus{border-color:#10b981;box-shadow:0 0 0 3px #d1fae5}`}</style>
+      </div>
+    );
+  }
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
@@ -317,11 +371,20 @@ function ComplaintCard({ r, onToggle }) {
           <p className="font-medium mt-1.5">{r.content}</p>
           {r.action && <p className="text-sm text-emerald-800 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-1.5 mt-2"><b>조치 · </b>{r.action}</p>}
           <p className="text-[11px] text-slate-400 mt-2 font-mono">{r.time} · {r.owner} · {r.by}</p>
+          <AuditLine r={r} />
         </div>
-        <button onClick={onToggle}
-          className={`shrink-0 flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${done ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-          {done ? <CheckCircle2 size={12} /> : <Clock size={12} />} {r.status}
-        </button>
+        <div className="shrink-0 flex flex-col items-end gap-2">
+          <button onClick={onToggle}
+            className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${done ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+            {done ? <CheckCircle2 size={12} /> : <Clock size={12} />} {r.status}
+          </button>
+          {editable && (
+            <div className="flex gap-1">
+              <button onClick={start} className="text-slate-400 hover:text-emerald-600 p-1" title="수정"><Pencil size={14} /></button>
+              <button onClick={onDelete} className="text-slate-400 hover:text-rose-600 p-1" title="삭제"><Trash2 size={14} /></button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -335,9 +398,11 @@ function Handover({ me, rows, setRows, complaints }) {
   const pending = complaints.filter((c) => c.status === "진행 중");
   const add = () => {
     if (!text.trim()) return;
-    setRows([{ id: Date.now(), type: "인계 메모", text, by: me.id, dept: me.dept, at: nowLocal().replace("T", " ") }, ...rows]);
+    setRows([{ id: Date.now(), type: "인계 메모", text, by: me.id, dept: me.dept, at: nowLocal().replace("T", " "), hist: [], deleted: null }, ...rows]);
     setText("");
   };
+  const saveEdit = (id, newText) => setRows(rows.map((r) => r.id === id ? { ...r, text: newText, hist: [...(r.hist || []), { by: me.id, at: stamp() }] } : r));
+  const del = (id) => { if (window.confirm("이 인계 메모를 삭제할까요?")) setRows(rows.map((r) => r.id === id ? { ...r, deleted: { by: me.id, at: stamp() } } : r)); };
   return (
     <div className="space-y-4">
       <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
@@ -354,18 +419,38 @@ function Handover({ me, rows, setRows, complaints }) {
         <button onClick={add} className="mt-2 flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium px-4 py-2"><Send size={14} /> 등록</button>
       </div>
       <div className="space-y-2">
-        {visible.map((r) => (
-          <div key={r.id} className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-xs px-2 py-0.5 rounded bg-sky-100 text-sky-700">{r.type}</span>
-              <span className="text-xs text-slate-400 font-mono">{r.dept}</span>
-            </div>
-            <p className="text-sm">{r.text}</p>
-            <p className="text-[11px] text-slate-400 mt-1.5 font-mono">{r.at} · {r.by}</p>
-          </div>
-        ))}
+        {visible.map((r) => r.deleted
+          ? <DeletedCard key={r.id} r={r} label="인계 메모" />
+          : <MemoCard key={r.id} r={r} onSave={(t) => saveEdit(r.id, t)} onDelete={() => del(r.id)} />)}
         {!visible.length && <p className="text-center text-slate-400 text-sm py-6">표시할 인수인계가 없습니다.</p>}
       </div>
+    </div>
+  );
+}
+function MemoCard({ r, onSave, onDelete }) {
+  const [edit, setEdit] = useState(false);
+  const [t, setT] = useState(r.text);
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm">
+      <div className="flex items-center gap-2 mb-1">
+        <span className="text-xs px-2 py-0.5 rounded bg-sky-100 text-sky-700">{r.type}</span>
+        <span className="text-xs text-slate-400 font-mono">{r.dept}</span>
+        <div className="ml-auto flex gap-1">
+          <button onClick={() => { setT(r.text); setEdit(!edit); }} className="text-slate-400 hover:text-emerald-600 p-1" title="수정"><Pencil size={13} /></button>
+          <button onClick={onDelete} className="text-slate-400 hover:text-rose-600 p-1" title="삭제"><Trash2 size={13} /></button>
+        </div>
+      </div>
+      {edit ? (
+        <div>
+          <textarea rows={2} value={t} onChange={(e) => setT(e.target.value)} className="w-full rounded-lg border border-slate-200 p-2 text-sm outline-none focus:border-emerald-500 resize-none" />
+          <div className="flex gap-2 mt-2">
+            <button onClick={() => { if (t.trim()) { onSave(t); setEdit(false); } }} className="rounded-lg bg-emerald-600 text-white text-xs font-medium px-3 py-1.5">저장</button>
+            <button onClick={() => setEdit(false)} className="rounded-lg border border-slate-200 text-slate-500 text-xs px-3 py-1.5">취소</button>
+          </div>
+        </div>
+      ) : <p className="text-sm">{r.text}</p>}
+      <p className="text-[11px] text-slate-400 mt-1.5 font-mono">{r.at} · {r.by}</p>
+      <AuditLine r={r} />
     </div>
   );
 }
@@ -379,10 +464,12 @@ function Requests({ me, rows, setRows }) {
   const visible = office ? rows : rows.filter((r) => r.by === me.id || !r.officeOnly);
   const add = () => {
     if (!text.trim()) return;
-    setRows([{ id: Date.now(), text, officeOnly, by: me.id, dept: me.dept, date: today(), replies: [] }, ...rows]);
+    setRows([{ id: Date.now(), text, officeOnly, by: me.id, dept: me.dept, date: today(), replies: [], hist: [], deleted: null }, ...rows]);
     setText(""); setOfficeOnly(true);
   };
   const reply = (id, msg) => setRows(rows.map((r) => r.id === id ? { ...r, replies: [...r.replies, { text: msg, by: me.id, date: today() }] } : r));
+  const saveEdit = (id, newText) => setRows(rows.map((r) => r.id === id ? { ...r, text: newText, hist: [...(r.hist || []), { by: me.id, at: stamp() }] } : r));
+  const del = (id) => { if (window.confirm("이 요청을 삭제할까요?")) setRows(rows.map((r) => r.id === id ? { ...r, deleted: { by: me.id, at: stamp() } } : r)); };
   return (
     <div>
       <div className="bg-white rounded-xl border border-slate-200 p-4 mb-4">
@@ -399,21 +486,40 @@ function Requests({ me, rows, setRows }) {
       </div>
       {office && <p className="text-xs text-emerald-700 mb-2 flex items-center gap-1"><Inbox size={13} /> 사무실 권한 · 모든 요청을 열람하고 답변할 수 있습니다.</p>}
       <div className="space-y-2">
-        {visible.map((r) => <RequestCard key={r.id} r={r} canReply={office} onReply={(m) => reply(r.id, m)} />)}
+        {visible.map((r) => r.deleted
+          ? <DeletedCard key={r.id} r={r} label="요청" />
+          : <RequestCard key={r.id} r={r} canReply={office} canEdit={r.by === me.id || office} onReply={(m) => reply(r.id, m)} onSave={(t) => saveEdit(r.id, t)} onDelete={() => del(r.id)} />)}
         {!visible.length && <p className="text-center text-slate-400 text-sm py-6">요청이 없습니다.</p>}
       </div>
     </div>
   );
 }
-function RequestCard({ r, canReply, onReply }) {
+function RequestCard({ r, canReply, canEdit, onReply, onSave, onDelete }) {
   const [msg, setMsg] = useState("");
+  const [edit, setEdit] = useState(false);
+  const [t, setT] = useState(r.text);
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
       <div className="flex items-center gap-2 mb-1">
         {r.officeOnly && <span className="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">🔒 사무실만</span>}
+        {canEdit && (
+          <div className="ml-auto flex gap-1">
+            <button onClick={() => { setT(r.text); setEdit(!edit); }} className="text-slate-400 hover:text-emerald-600 p-1" title="수정"><Pencil size={13} /></button>
+            <button onClick={onDelete} className="text-slate-400 hover:text-rose-600 p-1" title="삭제"><Trash2 size={13} /></button>
+          </div>
+        )}
       </div>
-      <p className="text-sm">{r.text}</p>
+      {edit ? (
+        <div>
+          <textarea rows={2} value={t} onChange={(e) => setT(e.target.value)} className="w-full rounded-lg border border-slate-200 p-2 text-sm outline-none focus:border-emerald-500 resize-none" />
+          <div className="flex gap-2 mt-2">
+            <button onClick={() => { if (t.trim()) { onSave(t); setEdit(false); } }} className="rounded-lg bg-emerald-600 text-white text-xs font-medium px-3 py-1.5">저장</button>
+            <button onClick={() => setEdit(false)} className="rounded-lg border border-slate-200 text-slate-500 text-xs px-3 py-1.5">취소</button>
+          </div>
+        </div>
+      ) : <p className="text-sm">{r.text}</p>}
       <p className="text-[11px] text-slate-400 mt-1.5 font-mono">{r.date} · {r.by} ({r.dept})</p>
+      <AuditLine r={r} />
       {r.replies.map((rp, i) => (
         <div key={i} className="mt-2 ml-3 pl-3 border-l-2 border-emerald-200">
           <p className="text-sm text-emerald-800">↳ {rp.text}</p>
@@ -436,6 +542,7 @@ function RecordSearch({ complaints }) {
   const [q, setQ] = useState("");
   const [f, setF] = useState("전체");
   const list = useMemo(() => complaints.filter((r) => {
+    if (r.deleted) return false;
     const catOk = f === "전체" || r.cat === f || r.status === f;
     const qOk = !q.trim() || (`${r.content} ${r.action} ${r.name} ${r.dong}`).toLowerCase().includes(q.toLowerCase());
     return catOk && qOk;
@@ -557,33 +664,56 @@ function Lessons({ me }) {
   const [dong, setDong] = useState("");
   const [ho, setHo] = useState("");
   const [name, setName] = useState("");
+  const [amount, setAmount] = useState("");
+  const [closed, setClosed] = useState("");
+  const [safe, setSafe] = useState(true);
   const [log, setLog] = useState([]);
   const [running, setRunning] = useState(false);
+  const [copiedId, setCopiedId] = useState(null);
 
   const selectCat = (c) => { setCat(c); setCourse(""); };
 
+  const orderText = (r) => [
+    `[BYB 강습 작업 지시서]`,
+    `작업: ${r.action === "등록" ? "등록(차감)" : "취소(환불)"}`,
+    `강좌명: ${r.course}`,
+    `회원명: ${r.name}`,
+    `동/호: ${r.dong} / ${r.ho}`,
+    `금액: ${r.amount ? r.amount : "(자동 계산)"}`,
+    `휴강일: ${r.closed || "(없음)"}`,
+    `안전모드: ${r.safe ? "ON" : "OFF"}`,
+    `접수자: ${r.by} / ${r.at}`,
+  ].join("\n");
+
+  const copyOrder = (r) => {
+    navigator.clipboard?.writeText(orderText(r)).then(() => {
+      setCopiedId(r.id); setTimeout(() => setCopiedId(null), 1500);
+    });
+  };
+
   const run = () => {
     if (!course) { alert("강좌를 먼저 선택하세요."); return; }
-    if (!dong.trim() || !ho.trim() || !name.trim()) { alert("동·호수·이름을 모두 입력하세요."); return; }
+    if (!name.trim()) { alert("회원 이름을 입력하세요."); return; }
+    if (action === "등록" && (!dong.trim() || !ho.trim())) { alert("등록 시 동·호수는 필수입니다."); return; }
     setRunning(true);
-    // TODO: 여기가 파이썬 프로그램 연동 지점입니다.
-    // 지금은 백엔드가 없어서 실제로 실행되지는 않고, 요청 내용만 기록됩니다.
-    // 파이썬 코드를 주시면 이 부분을 서버(API 라우트)로 연결해 진짜 실행되게 만들겠습니다.
+    // ── 파이썬 프로그램 연동 지점 ──
+    // 웹은 브라우저에서 돌아가므로 데스크톱 파이썬(byb_강좌등록취소_자동화_v2.py)을 직접 실행할 수 없습니다.
+    // 현재는 요청을 '작업 지시서'로 정리해 기록하고, 복사 버튼으로 데스크톱 프로그램에 옮겨 실행합니다.
+    // (원할 경우, PC에서 파이썬을 로컬 서버로 띄워 이 버튼과 연결하는 고급 방식도 가능)
     setTimeout(() => {
-      setLog([{ id: Date.now(), cat, course, action, dong, ho, name, by: me.id, at: nowLocal().replace("T", " ") }, ...log]);
+      setLog([{ id: Date.now(), cat, course, action, dong, ho, name, amount, closed, safe, by: me.id, at: nowLocal().replace("T", " ") }, ...log]);
       setRunning(false);
-      setDong(""); setHo(""); setName("");
-    }, 500);
+      setDong(""); setHo(""); setName(""); setAmount(""); setClosed("");
+    }, 400);
   };
 
   return (
     <div>
-      <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 text-xs text-amber-800">
-        ⚠ 지금은 화면(폼)까지만 완성된 상태예요. "실행"을 누르면 요청 내용이 아래 목록에 기록만 되고,
-        실제 BYB 등록·취소 처리는 파이썬 코드를 서버에 연결한 뒤부터 동작합니다.
+      <div className="bg-sky-50 border border-sky-200 rounded-xl p-3 mb-4 text-xs text-sky-800 leading-relaxed">
+        💡 이 화면은 <b>접수·정리</b>를 담당합니다. "실행"을 누르면 입력한 내용이 아래에 <b>작업 지시서</b>로 정리돼요.
+        실제 BYB 등록·취소는 데스크톱 파이썬 프로그램이 처리하며, 각 지시서의 <b>복사</b> 버튼으로 옮겨 실행하면 됩니다.
       </div>
 
-      {/* 분류 탭 */}
       <div className="flex gap-1.5 mb-4 overflow-x-auto pb-1">
         {LESSON_CATS.map((c) => (
           <button key={c} onClick={() => selectCat(c)}
@@ -594,20 +724,18 @@ function Lessons({ me }) {
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
-        {/* 등록/취소 토글 */}
         <div>
           <span className="text-xs font-medium text-slate-500 block mb-1.5">처리 구분</span>
           <div className="inline-flex p-1 bg-slate-100 rounded-lg">
             {["등록", "취소"].map((a) => (
               <button key={a} onClick={() => setAction(a)}
                 className={`px-4 py-1.5 rounded-md text-sm font-medium transition ${action === a ? (a === "등록" ? "bg-emerald-600 text-white" : "bg-rose-500 text-white") : "text-slate-500"}`}>
-                {a}
+                {a === "등록" ? "등록(차감)" : "취소(환불)"}
               </button>
             ))}
           </div>
         </div>
 
-        {/* 강좌 선택 */}
         <label className="block">
           <span className="text-xs font-medium text-slate-500 block mb-1.5">강좌 선택 · {cat} ({COURSES[cat].length}개)</span>
           <select value={course} onChange={(e) => setCourse(e.target.value)}
@@ -617,38 +745,55 @@ function Lessons({ me }) {
           </select>
         </label>
 
-        {/* 대상자 정보 */}
         <div className="grid grid-cols-3 gap-2">
-          <label className="block"><span className="text-xs font-medium text-slate-500 block mb-1.5">동</span>
+          <label className="block"><span className="text-xs font-medium text-slate-500 block mb-1.5">동 {action === "등록" && <b className="text-rose-500">*</b>}</span>
             <input value={dong} onChange={(e) => setDong(e.target.value)} placeholder="예: 208"
               className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500" /></label>
-          <label className="block"><span className="text-xs font-medium text-slate-500 block mb-1.5">호수</span>
+          <label className="block"><span className="text-xs font-medium text-slate-500 block mb-1.5">호수 {action === "등록" && <b className="text-rose-500">*</b>}</span>
             <input value={ho} onChange={(e) => setHo(e.target.value)} placeholder="예: 1504"
               className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500" /></label>
-          <label className="block"><span className="text-xs font-medium text-slate-500 block mb-1.5">이름</span>
+          <label className="block"><span className="text-xs font-medium text-slate-500 block mb-1.5">이름 <b className="text-rose-500">*</b></span>
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="회원 성함"
               className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500" /></label>
         </div>
 
+        <div className="grid grid-cols-2 gap-2">
+          <label className="block"><span className="text-xs font-medium text-slate-500 block mb-1.5">금액 (선택)</span>
+            <input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="비우면 자동 계산"
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500" /></label>
+          <label className="block"><span className="text-xs font-medium text-slate-500 block mb-1.5">휴강일 (선택)</span>
+            <input value={closed} onChange={(e) => setClosed(e.target.value)} placeholder="예: 8/12, 8/19"
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500" /></label>
+        </div>
+
+        <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer select-none">
+          <input type="checkbox" checked={safe} onChange={(e) => setSafe(e.target.checked)} className="w-4 h-4 rounded border-slate-300 accent-emerald-600" />
+          안전모드 (최종 환불/예약생성 버튼은 데스크톱에서 직접 클릭)
+        </label>
+
         <button onClick={run} disabled={running}
           className={`w-full flex items-center justify-center gap-2 rounded-lg text-white text-sm font-medium py-2.5 transition disabled:opacity-50
             ${action === "등록" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-rose-600 hover:bg-rose-700"}`}>
-          {running ? <><Loader2 size={16} className="animate-spin" /> 처리 중…</> : <><PlayCircle size={16} /> 실행 ({action})</>}
+          {running ? <><Loader2 size={16} className="animate-spin" /> 정리 중…</> : <><PlayCircle size={16} /> 실행 ({action === "등록" ? "등록" : "취소"} 지시서 생성)</>}
         </button>
       </div>
 
       {log.length > 0 && (
         <div className="mt-4">
-          <p className="text-sm font-semibold text-slate-700 mb-2">처리 요청 기록</p>
+          <p className="text-sm font-semibold text-slate-700 mb-2">작업 지시서</p>
           <div className="space-y-2">
             {log.map((r) => (
               <div key={r.id} className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm">
                 <div className="flex items-center gap-2">
-                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${r.action === "등록" ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>{r.action}</span>
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${r.action === "등록" ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>{r.action === "등록" ? "등록(차감)" : "취소(환불)"}</span>
                   <span className="text-xs text-slate-400">{r.cat}</span>
+                  <button onClick={() => copyOrder(r)} className="ml-auto flex items-center gap-1 text-xs text-slate-500 hover:text-emerald-600">
+                    <Copy size={13} /> {copiedId === r.id ? "복사됨!" : "복사"}
+                  </button>
                 </div>
                 <p className="text-sm font-medium mt-1">{r.course}</p>
-                <p className="text-xs text-slate-500 mt-0.5">{r.dong}동 {r.ho}호 · {r.name}</p>
+                <p className="text-xs text-slate-500 mt-0.5">{r.dong}동 {r.ho}호 · {r.name}
+                  {r.amount && ` · 금액 ${r.amount}`}{r.closed && ` · 휴강 ${r.closed}`} · 안전모드 {r.safe ? "ON" : "OFF"}</p>
                 <p className="text-[11px] text-slate-400 mt-1.5 font-mono">{r.at} · {r.by}</p>
               </div>
             ))}
