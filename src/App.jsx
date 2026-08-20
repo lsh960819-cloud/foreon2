@@ -2,7 +2,7 @@ import React, { useState, useMemo } from "react";
 import {
   LogIn, LogOut, Search, PackageSearch, ClipboardList, CalendarDays, Sparkles, BarChart3,
   Plus, X, User, Loader2, MessageSquareWarning, ArrowLeftRight, Inbox, Send, Upload,
-  CheckCircle2, Clock, FileText
+  CheckCircle2, Clock, FileText, GraduationCap, PlayCircle
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell
@@ -25,6 +25,76 @@ const AI_ADMIN = "foreon4"; // AI 정리 · 매출 분석 사용 가능한 계�
 const 민원카테고리 = ["시설 고장", "이용 안내", "회원 접수", "결제·환불", "기타"];
 const 담당부서 = ["데스크", "피트니스", "골프장"];
 
+/* 강습 등록·취소 — 분류 순서 및 강좌 목록 */
+const LESSON_CATS = ["요가", "줌바", "타바타", "매트", "방송", "근력", "축구", "농구", "수영", "아쿠아로빅"];
+const COURSES = {
+  요가: [
+    "2단지 요가(수금19시/한승지)", "2단지 요가(수금20시/한승지)", "2단지 요가(수금21시/한승지)",
+    "2단지 요가(화목07시/김수정)", "2단지 요가(화목08시/김수정)", "2단지 요가(화목09시/도은진)",
+    "2단지 요가(화목10시/도은진)", "2단지 요가(화목20시/이인지)", "2단지 요가(화목21시/이인지)",
+    "2단지 요가(수금08시/윤명원)", "2단지 요가(수금09시/윤명원)", "2단지 요가(수금10시/윤명원)",
+    "2단지 요가(수금18시/박상희)", "2단지 요가(수금19시/박상희)", "2단지 요가(토19시/송혜정)", "2단지 요가(토20시/송혜정)",
+  ],
+  줌바: [
+    "2단지 줌바댄스(화목11시/김지희)", "2단지 줌바댄스(화목12시/김지희)",
+    "2단지 줌바댄스(화목17시/신성희)", "2단지 줌바댄스(화목18시/신성희)",
+    "2단지 줌바댄스(수금16시/김지인)", "2단지 줌바댄스(수금17시/김지인)",
+    "2단지 줌바댄스(토10시/박나리)", "2단지 줌바댄스(토11시/박나리)",
+  ],
+  타바타: ["2단지 타바타(수금11시/신수경)", "2단지 타바타(수금12시/신수경)"],
+  매트: ["2단지 매트필라테스(화목16시/김혜인)"],
+  방송: ["2단지 방송댄스(화목19시/방채빈)"],
+  근력: ["2단지 근력(토08시/이재욱)", "2단지 근력(토09시/이재욱)"],
+  축구: [
+    "2단지 축구교실(3~4학년/화14시/이범영)", "2단지 축구교실(1~2학년/화15시/이범영)", "2단지 축구교실(6~7세/화16시/이범영)",
+    "2단지 축구교실(성인여성/수10시/이범영)", "2단지 축구교실(1~2학년/수14시/이범영)", "2단지 축구교실(3~4학년/수15시/이범영)",
+    "2단지 축구교실(6~7세/수16시/이범영)", "2단지 축구교실(1~2학년/목14시/이범영)", "2단지 축구교실(5~6학년/목15시/이범영)",
+    "2단지 축구교실(6~7세/목16시/이범영)", "2단지 축구교실(성인여성/금10시/이범영)", "2단지 축구교실(1~2학년/금14시/이범영)",
+    "2단지 축구교실(3~4학년/금15시/이범영)", "2단지 축구교실(6~7세/금16시/이범영)",
+  ],
+  농구: [
+    "2단지 농구교실(1~2학년/화16시/배준태)", "2단지 농구교실(3~4학년/화17시/배준태)", "2단지 농구교실(5~6학년/화18시/배준태)", "2단지 농구교실(중학생/화19시/배준태)",
+    "2단지 농구교실(1~2학년/수16시/배준태)", "2단지 농구교실(3~4학년/수17시/배준태)", "2단지 농구교실(5~6학년/수18시/배준태)", "2단지 농구교실(중학생/수19시/배준태)",
+    "2단지 농구교실(1~2학년/목16시/배준태)", "2단지 농구교실(3~4학년/목17시/배준태)", "2단지 농구교실(5~6학년/목18시/배준태)", "2단지 농구교실(중학생/목19시/배준태)",
+    "2단지 농구교실(1~2학년/금16시/배준태)", "2단지 농구교실(3~4학년/금17시/배준태)", "2단지 농구교실(5~6학년/금18시/배준태)", "2단지 농구교실(중학생/금19시/배준태)",
+  ],
+  수영: [
+    "2단지 성인수영-중급(토20시/전유정)",
+    "2단지 성인수영-기초(화목06시30분/손태환)", "2단지 성인수영-초급(화목06시30분/김소운)", "2단지 성인수영-중급(화목06시30분/이규상)", "2단지 성인수영-상급(화목06시30분/박범호)",
+    "2단지 성인수영-기초(화목07시30분/손태환)", "2단지 성인수영-초급(화목07시30분/김소운)", "2단지 성인수영-중급(화목07시30분/이규상)", "2단지 성인수영-상급(화목07시30분/박범호)",
+    "2단지 성인수영-기초(화목09시/손태환)", "2단지 성인수영-초급(화목09시/김소운)", "2단지 성인수영-중급(화목09시/이규상)", "2단지 성인수영-상급(화목09시/박범호)",
+    "2단지 성인수영-기초(화목10시/손태환)", "2단지 성인수영-초급(화목10시/김소운)", "2단지 성인수영-중급(화목10시/이규상)", "2단지 성인수영-상급(화목10시/박범호)",
+    "2단지 성인수영-기초(화목20시/윤성수)", "2단지 성인수영-초급(화목20시/박동환)", "2단지 성인수영-중급(화목20시/전유정)", "2단지 성인수영-상급(화목20시/정인혁)",
+    "2단지 성인수영-기초(수금06시30분/박범호)", "2단지 성인수영-초급(수금06시30분/이규상)", "2단지 성인수영-중급(수금06시30분/김소운)", "2단지 성인수영-상급(수금06시30분/손태환)",
+    "2단지 성인수영-기초(수금07시30분/박범호)", "2단지 성인수영-초급(수금07시30분/이규상)", "2단지 성인수영-중급(수금07시30분/김소운)", "2단지 성인수영-상급(수금07시30분/손태환)",
+    "2단지 성인수영-기초(수금09시/박범호)", "2단지 성인수영-초급(수금09시/이규상)", "2단지 성인수영-중급(수금09시/김소운)", "2단지 성인수영-상급(수금09시/손태환)",
+    "2단지 성인수영-기초(수금10시/박범호)", "2단지 성인수영-초급(수금10시/이규상)", "2단지 성인수영-중급(수금10시/김소운)", "2단지 성인수영-상급(수금10시/손태환)",
+    "2단지 성인수영-기초(수금20시/윤성수)", "2단지 성인수영-초급(수금20시/박동환)", "2단지 성인수영-중급(수금20시/전유정)", "2단지 성인수영-상급(수금20시/정인혁)",
+    "2단지 어린이수영-기초(화목16시/정인혁)", "2단지 어린이수영-초급(화목16시/윤성수)", "2단지 어린이수영-중급(화목16시/박동환)", "2단지 어린이수영-상급(화목16시/전유정)",
+    "2단지 어린이수영-기초(화목17시/윤성수)", "2단지 어린이수영-초급(화목17시/정인혁)", "2단지 어린이수영-중급(화목17시/전유정)", "2단지 어린이수영-상급(화목17시/박동환)",
+    "2단지 어린이수영-기초(화목19시/정인혁)", "2단지 어린이수영-초급(화목19시/윤성수)", "2단지 어린이수영-중급(화목19시/전유정)", "2단지 어린이수영-상급(화목19시/박동환)",
+    "2단지 어린이수영-기초(수금16시/정인혁)", "2단지 어린이수영-초급(수금16시/전유정)", "2단지 어린이수영-중급(수금16시/윤성수)", "2단지 어린이수영-상급(수금16시/박동환)",
+    "2단지 어린이수영-기초(수금17시/윤성수)", "2단지 어린이수영-초급(수금17시/정인혁)", "2단지 어린이수영-중급(수금17시/전유정)", "2단지 어린이수영-상급(수금17시/박동환)",
+    "2단지 어린이수영-기초(수금19시/정인혁)", "2단지 어린이수영-초급(수금19시/윤성수)", "2단지 어린이수영-중급(수금19시/전유정)", "2단지 어린이수영-상급(수금19시/박동환)",
+    "2단지 성인수영-기초(토06시30분/박범호)", "2단지 성인수영-초급(토06시30분/이규상)", "2단지 성인수영-중급(토06시30분/손태준)", "2단지 성인수영-상급(토06시30분/김소운)",
+    "2단지 성인수영-기초(토07시30분/박범호)", "2단지 성인수영-초급(토07시30분/이규상)", "2단지 성인수영-중급(토07시30분/손태준)", "2단지 성인수영-상급(토07시30분/김소운)",
+    "2단지 성인수영-기초초급(토09시/이규상)", "2단지 성인수영-중상급(토09시/김소운)", "2단지 성인수영-상급(토09시/박범호)",
+    "2단지 성인수영-기초초급(토10시/이규상)", "2단지 성인수영-중상급(토10시/김소운)", "2단지 성인수영-상급(토10시/박범호)",
+    "2단지 성인수영-기초(토16시/박동환)", "2단지 성인수영-상급(토17시/윤성수)",
+    "2단지 성인수영-기초초급(토19시/박동환)", "2단지 성인수영-중상급(토19시/정인혁)",
+    "2단지 성인수영-기초초급(토20시/박동환)", "2단지 성인수영-상급(토20시/정인혁)",
+    "2단지 어린이수영-기초초급(토09시/손태준)", "2단지 어린이수영-중상급(토10시/손태준)",
+    "2단지 어린이수영-기초초급(토16시/정인혁)", "2단지 어린이수영-중상급(토16시/윤성수)",
+    "2단지 어린이수영-기초초급(토17시/박동환)", "2단지 어린이수영-중상급(토17시/정인혁)",
+    "2단지 어린이수영-기초(토19시/윤성수)", "2단지 어린이수영-상급(토20시/윤성수)",
+  ],
+  아쿠아로빅: [
+    "2단지 아쿠아로빅(화목11시/최성준)", "2단지 아쿠아로빅(화목12시/최성준)", "2단지 아쿠아로빅(화목14시/최성준)", "2단지 아쿠아로빅(화목15시/최성준)",
+    "2단지 아쿠아로빅(수금11시/오미화)", "2단지 아쿠아로빅(수금12시/오미화)", "2단지 아쿠아로빅(수금14시/오미화)", "2단지 아쿠아로빅(수금15시/오미화)",
+    "2단지 아쿠아로빅(토15시/박원정)", "2단지 아쿠아로빅(토14시/박원정)", "2단지 아쿠아로빅(토12시/박원정)", "2단지 아쿠아로빅(토11시/박원정)",
+  ],
+};
+
 const today = () => new Date().toISOString().slice(0, 10);
 const nowLocal = () => {
   const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
@@ -35,6 +105,24 @@ const won = (n) => n.toLocaleString("ko-KR") + "원";
 export default function App() {
   const [me, setMe] = useState(null); // { id, dept }
   const [tab, setTab] = useState("worklog");
+
+  // 우클릭·단축키 방해 (참고: 브라우저 코드 특성상 100% 차단은 불가능합니다.
+  // 마음먹은 사용자는 주소창 코드 입력 등으로 우회할 수 있어요 — 초보 접근만 늦추는 수준입니다.)
+  React.useEffect(() => {
+    const blockKeys = (e) => {
+      const k = e.key?.toUpperCase();
+      if (k === "F12" || (e.ctrlKey && e.shiftKey && ["I", "J", "C"].includes(k)) || (e.ctrlKey && k === "U")) {
+        e.preventDefault();
+      }
+    };
+    const blockRight = (e) => e.preventDefault();
+    document.addEventListener("keydown", blockKeys);
+    document.addEventListener("contextmenu", blockRight);
+    return () => {
+      document.removeEventListener("keydown", blockKeys);
+      document.removeEventListener("contextmenu", blockRight);
+    };
+  }, []);
 
   const [complaints, setComplaints] = useState([
     { id: 1, time: "2026-08-13 14:20", cat: "시설 고장", dong: "208", ho: "1504", name: "임정윤", phone: "", content: "여자 탈의실 온수 미지근함", action: "시설팀 점검 요청, 밸브 조정 후 정상화 안내", owner: "데스크", status: "진행 중", by: "foreon6", dept: "데스크", date: "2026-08-13" },
@@ -61,6 +149,7 @@ export default function App() {
     { id: "search", label: "기록 검색", icon: Search },
     { id: "lost", label: "분실물", icon: PackageSearch },
     { id: "events", label: "주요 행사·일정", icon: CalendarDays },
+    { id: "lessons", label: "강습 등록·취소", icon: GraduationCap },
     ...(isAI ? [{ id: "ai", label: "AI 카톡 정리", icon: Sparkles }, { id: "sales", label: "매출 분석", icon: BarChart3 }] : []),
     { id: "link", label: "외부 연동", icon: ArrowLeftRight },
   ];
@@ -99,6 +188,7 @@ export default function App() {
         {tab === "search" && <RecordSearch complaints={complaints} />}
         {tab === "lost" && <Lost me={me} rows={lost} setRows={setLost} />}
         {tab === "events" && <Events me={me} rows={events} setRows={setEvents} />}
+        {tab === "lessons" && <Lessons me={me} />}
         {tab === "ai" && isAI && <TodayAI me={me} onSave={(items) => setComplaints((c) => [...items, ...c])} />}
         {tab === "sales" && isAI && <Sales />}
         {tab === "link" && <LinkInfo />}
@@ -127,14 +217,14 @@ function Login({ onLogin }) {
         </div>
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
           <label className="block"><span className="text-xs font-medium text-slate-600 mb-1.5 block">아이디</span>
-            <input value={id} onChange={(e) => setId(e.target.value)} placeholder="foreon1"
+            <input value={id} onChange={(e) => setId(e.target.value)} placeholder="아이디 입력"
               className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" /></label>
           <label className="block"><span className="text-xs font-medium text-slate-600 mb-1.5 block">비밀번호</span>
-            <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} placeholder="1234"
+            <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} placeholder="비밀번호 입력"
               className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" /></label>
           {err && <p className="text-xs text-red-500">{err}</p>}
           <button onClick={submit} className="w-full flex items-center justify-center gap-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium py-2.5 transition"><LogIn size={16} /> 로그인</button>
-          <p className="text-[11px] leading-relaxed text-slate-400 text-center">foreon1~12 · 비밀번호 1234<br />foreon1~5 사무실 · 6~9 데스크 · 10~11 골프장 · 12 피트니스</p>
+          <p className="text-[11px] leading-relaxed text-slate-400 text-center">담당자에게 배정받은 계정으로 로그인하세요.</p>
         </div>
       </div>
     </div>
@@ -459,7 +549,117 @@ function Events({ me, rows, setRows }) {
   );
 }
 
-/* ─────────────────────── AI 카톡 정리 (foreon4 전용) */
+/* ─────────────────────── 강습 등록·취소 */
+function Lessons({ me }) {
+  const [cat, setCat] = useState(LESSON_CATS[0]);
+  const [course, setCourse] = useState("");
+  const [action, setAction] = useState("등록"); // 등록 | 취소
+  const [dong, setDong] = useState("");
+  const [ho, setHo] = useState("");
+  const [name, setName] = useState("");
+  const [log, setLog] = useState([]);
+  const [running, setRunning] = useState(false);
+
+  const selectCat = (c) => { setCat(c); setCourse(""); };
+
+  const run = () => {
+    if (!course) { alert("강좌를 먼저 선택하세요."); return; }
+    if (!dong.trim() || !ho.trim() || !name.trim()) { alert("동·호수·이름을 모두 입력하세요."); return; }
+    setRunning(true);
+    // TODO: 여기가 파이썬 프로그램 연동 지점입니다.
+    // 지금은 백엔드가 없어서 실제로 실행되지는 않고, 요청 내용만 기록됩니다.
+    // 파이썬 코드를 주시면 이 부분을 서버(API 라우트)로 연결해 진짜 실행되게 만들겠습니다.
+    setTimeout(() => {
+      setLog([{ id: Date.now(), cat, course, action, dong, ho, name, by: me.id, at: nowLocal().replace("T", " ") }, ...log]);
+      setRunning(false);
+      setDong(""); setHo(""); setName("");
+    }, 500);
+  };
+
+  return (
+    <div>
+      <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 text-xs text-amber-800">
+        ⚠ 지금은 화면(폼)까지만 완성된 상태예요. "실행"을 누르면 요청 내용이 아래 목록에 기록만 되고,
+        실제 BYB 등록·취소 처리는 파이썬 코드를 서버에 연결한 뒤부터 동작합니다.
+      </div>
+
+      {/* 분류 탭 */}
+      <div className="flex gap-1.5 mb-4 overflow-x-auto pb-1">
+        {LESSON_CATS.map((c) => (
+          <button key={c} onClick={() => selectCat(c)}
+            className={`shrink-0 text-sm font-medium px-3.5 py-1.5 rounded-full transition ${cat === c ? "bg-emerald-600 text-white" : "bg-white border border-slate-200 text-slate-500"}`}>
+            {c}
+          </button>
+        ))}
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
+        {/* 등록/취소 토글 */}
+        <div>
+          <span className="text-xs font-medium text-slate-500 block mb-1.5">처리 구분</span>
+          <div className="inline-flex p-1 bg-slate-100 rounded-lg">
+            {["등록", "취소"].map((a) => (
+              <button key={a} onClick={() => setAction(a)}
+                className={`px-4 py-1.5 rounded-md text-sm font-medium transition ${action === a ? (a === "등록" ? "bg-emerald-600 text-white" : "bg-rose-500 text-white") : "text-slate-500"}`}>
+                {a}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* 강좌 선택 */}
+        <label className="block">
+          <span className="text-xs font-medium text-slate-500 block mb-1.5">강좌 선택 · {cat} ({COURSES[cat].length}개)</span>
+          <select value={course} onChange={(e) => setCourse(e.target.value)}
+            className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 bg-white">
+            <option value="">— 강좌를 선택하세요 —</option>
+            {COURSES[cat].map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </label>
+
+        {/* 대상자 정보 */}
+        <div className="grid grid-cols-3 gap-2">
+          <label className="block"><span className="text-xs font-medium text-slate-500 block mb-1.5">동</span>
+            <input value={dong} onChange={(e) => setDong(e.target.value)} placeholder="예: 208"
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500" /></label>
+          <label className="block"><span className="text-xs font-medium text-slate-500 block mb-1.5">호수</span>
+            <input value={ho} onChange={(e) => setHo(e.target.value)} placeholder="예: 1504"
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500" /></label>
+          <label className="block"><span className="text-xs font-medium text-slate-500 block mb-1.5">이름</span>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="회원 성함"
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500" /></label>
+        </div>
+
+        <button onClick={run} disabled={running}
+          className={`w-full flex items-center justify-center gap-2 rounded-lg text-white text-sm font-medium py-2.5 transition disabled:opacity-50
+            ${action === "등록" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-rose-600 hover:bg-rose-700"}`}>
+          {running ? <><Loader2 size={16} className="animate-spin" /> 처리 중…</> : <><PlayCircle size={16} /> 실행 ({action})</>}
+        </button>
+      </div>
+
+      {log.length > 0 && (
+        <div className="mt-4">
+          <p className="text-sm font-semibold text-slate-700 mb-2">처리 요청 기록</p>
+          <div className="space-y-2">
+            {log.map((r) => (
+              <div key={r.id} className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm">
+                <div className="flex items-center gap-2">
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${r.action === "등록" ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>{r.action}</span>
+                  <span className="text-xs text-slate-400">{r.cat}</span>
+                </div>
+                <p className="text-sm font-medium mt-1">{r.course}</p>
+                <p className="text-xs text-slate-500 mt-0.5">{r.dong}동 {r.ho}호 · {r.name}</p>
+                <p className="text-[11px] text-slate-400 mt-1.5 font-mono">{r.at} · {r.by}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 function TodayAI({ me, onSave }) {
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
