@@ -122,9 +122,34 @@ function DeletedCard({ r, label }) {
   );
 }
 
+const SESSION_KEY = "foreon2_session";
+const SESSION_HOURS = 8;
+
+function loadSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw);
+    if (Date.now() - s.at > SESSION_HOURS * 3600 * 1000) {
+      localStorage.removeItem(SESSION_KEY);
+      return null;
+    }
+    return { id: s.id, dept: s.dept };
+  } catch { return null; }
+}
+function saveSession(me) {
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify({ id: me.id, dept: me.dept, at: Date.now() })); } catch {}
+}
+function clearSession() {
+  try { localStorage.removeItem(SESSION_KEY); } catch {}
+}
+
 export default function App() {
-  const [me, setMe] = useState(null); // { id, dept }
+  const [me, setMe] = useState(() => loadSession());
   const [tab, setTab] = useState("worklog");
+
+  const login = (m) => { saveSession(m); setMe(m); };
+  const logout = () => { clearSession(); setMe(null); };
 
   // 우클릭·단축키 방해 (참고: 브라우저 코드 특성상 100% 차단은 불가능합니다.
   // 마음먹은 사용자는 주소창 코드 입력 등으로 우회할 수 있어요 — 초보 접근만 늦추는 수준입니다.)
@@ -161,7 +186,7 @@ export default function App() {
     { id: 1, item: "검정 무선 이어폰", place: "헬스장", found: "2026-08-11", by: "foreon6", status: "보관중" },
   ]);
 
-  if (!me) return <Login onLogin={setMe} />;
+  if (!me) return <Login onLogin={login} />;
   const isAI = me.id === AI_ADMIN;
 
   const tabs = [
@@ -184,7 +209,7 @@ export default function App() {
               <User size={14} className="text-emerald-600" /><b>{me.id}</b>
               <span className="text-xs text-slate-400 font-mono">{me.dept}</span>
             </span>
-            <button onClick={() => setMe(null)} className="text-slate-400 hover:text-slate-600 p-1.5"><LogOut size={16} /></button>
+            <button onClick={logout} className="text-slate-400 hover:text-slate-600 p-1.5"><LogOut size={16} /></button>
           </div>
         </div>
       </div>
