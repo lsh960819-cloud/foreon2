@@ -8,6 +8,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell
 } from "recharts";
 import * as XLSX from "xlsx";
+import { supabase } from "./supabaseClient.js";
 
 /* ═══════════════════════════════════════════════════════════
    계정: foreon1 ~ foreon12 · 비밀번호 전부 "1234"
@@ -696,22 +697,25 @@ function Lessons({ me }) {
     if (!name.trim()) { alert("회원 이름을 입력하세요."); return; }
     if (action === "등록" && (!dong.trim() || !ho.trim())) { alert("등록 시 동·호수는 필수입니다."); return; }
     setRunning(true);
-    // ── 파이썬 프로그램 연동 지점 ──
-    // 웹은 브라우저에서 돌아가므로 데스크톱 파이썬(byb_강좌등록취소_자동화_v2.py)을 직접 실행할 수 없습니다.
-    // 현재는 요청을 '작업 지시서'로 정리해 기록하고, 복사 버튼으로 데스크톱 프로그램에 옮겨 실행합니다.
-    // (원할 경우, PC에서 파이썬을 로컬 서버로 띄워 이 버튼과 연결하는 고급 방식도 가능)
-    setTimeout(() => {
-      setLog([{ id: Date.now(), cat, course, action, dong, ho, name, amount, closed, safe, by: me.id, at: nowLocal().replace("T", " ") }, ...log]);
+    const job = { action, cat, course, member: name, dong, ho, amount, closed, safe, status: "pending", by: me.id, at: nowLocal().replace("T", " ") };
+    // Supabase 'lesson_jobs' 게시판에 요청 저장 → PC 파이썬이 읽어서 BYB 실행
+    supabase.from("lesson_jobs").insert(job).then(({ error }) => {
       setRunning(false);
+      if (error) {
+        alert("요청 전송 실패: " + error.message + "\n(Supabase 설정 또는 인터넷 연결을 확인하세요)");
+        return;
+      }
+      setLog([{ id: Date.now(), ...job }, ...log]);
       setDong(""); setHo(""); setName(""); setAmount(""); setClosed("");
-    }, 400);
+    });
   };
 
   return (
     <div>
       <div className="bg-sky-50 border border-sky-200 rounded-xl p-3 mb-4 text-xs text-sky-800 leading-relaxed">
-        💡 이 화면은 <b>접수·정리</b>를 담당합니다. "실행"을 누르면 입력한 내용이 아래에 <b>작업 지시서</b>로 정리돼요.
-        실제 BYB 등록·취소는 데스크톱 파이썬 프로그램이 처리하며, 각 지시서의 <b>복사</b> 버튼으로 옮겨 실행하면 됩니다.
+        💡 "실행"을 누르면 요청이 <b>Supabase 게시판</b>에 저장되고, 이승헌 님 PC에서 대기 중인 파이썬 프로그램이
+        이를 읽어 <b>BYB 등록·취소를 실제로 처리</b>합니다. (PC가 켜져 있고 파이썬 작업자 프로그램이 실행 중이어야 해요.)
+        안전모드 ON이면 마지막 버튼은 PC에서 직접 누르게 됩니다.
       </div>
 
       <div className="flex gap-1.5 mb-4 overflow-x-auto pb-1">
