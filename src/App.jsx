@@ -104,6 +104,37 @@ const nowLocal = () => {
   return d.toISOString().slice(0, 16);
 };
 const won = (n) => n.toLocaleString("ko-KR") + "원";
+
+/* ── 독서실·골프백 금액표 (날짜 1~31일, 첨부 금액표 그대로 내장) ──
+   DEDUCT = 등록 시 차감입력 / REFUND = 취소 시 환불입력 */
+const AMT = {
+  독서실_개인: {
+    price: 130000,
+    deduct: [0,0,4330,8660,13000,17330,21660,26000,30330,34660,39000,43330,47660,52000,56330,60660,65000,69330,73660,78000,82330,86660,91000,95330,99660,104000,108330,112660,117000,121330,125660,125660],
+    refund: [0,125660,121330,117000,112660,108330,104000,99660,95330,91000,86660,82330,78000,73660,69330,65000,60660,56330,52000,47660,43330,39000,34660,30330,26000,21660,17330,13000,8660,4330,0,0],
+  },
+  독서실_일반: {
+    price: 70000,
+    deduct: [0,0,2330,4660,7000,9330,11660,14000,16330,18660,21000,23330,25660,28000,30330,32660,35000,37330,39660,42000,44330,46660,49000,51330,53660,56000,58330,60660,63000,65330,67660,67660],
+    refund: [0,67660,65330,63000,60660,58330,56000,53660,51330,49000,46660,44330,42000,39660,37330,35000,32660,30330,28000,25660,23330,21000,18660,16330,14000,11660,9330,7000,4660,2330,0,0],
+  },
+  골프백_상단: {
+    price: 10000,
+    deduct: [0,0,330,660,1000,1330,1660,2000,2330,2660,3000,3330,3660,4000,4330,4660,5000,5330,5660,6000,6330,6660,7000,7330,7660,8000,8330,8660,9000,9330,9660,9660],
+    refund: [0,9660,9330,9000,8660,8330,8000,7660,7330,7000,6660,6330,6000,5660,5330,5000,4660,4330,4000,3660,3330,3000,2660,2330,2000,1660,1330,1000,660,330,0,0],
+  },
+  골프백_하단: {
+    price: 13000,
+    deduct: [0,0,430,860,1300,1730,2160,2600,3030,3460,3900,4330,4760,5200,5630,6060,6500,6930,7360,7800,8230,8660,9100,9530,9960,10400,10830,11260,11700,12130,12560,12560],
+    refund: [0,12560,12130,11700,11260,10830,10400,9960,9530,9100,8660,8230,7800,7360,6930,6500,6060,5630,5200,4760,4330,3900,3460,3030,2600,2160,1730,1300,860,430,0,0],
+  },
+};
+// 31일까지 있는 달의 31일은 30일로 취급 (배열은 이미 31=30값과 동일하게 채움)
+function calcAmount(product, action, day) {
+  const t = AMT[product]; if (!t || !day) return null;
+  const d = Math.min(Math.max(day, 1), 31);
+  return (action === "등록" ? t.deduct : t.refund)[d];
+}
 const stamp = () => {
   const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
   return d.toISOString().slice(0, 16).replace("T", " ");
@@ -196,7 +227,8 @@ export default function App() {
     { id: "search", label: "기록 검색", icon: Search },
     { id: "lost", label: "분실물", icon: PackageSearch },
     { id: "events", label: "주요 행사·일정", icon: CalendarDays },
-    { id: "lessons", label: "강습 등록·취소", icon: GraduationCap },
+    { id: "lessons", label: "등록·취소", icon: GraduationCap },
+    { id: "worklogs", label: "작업 기록", icon: FileText },
     ...(isAI ? [{ id: "ai", label: "AI 카톡 정리", icon: Sparkles }, { id: "sales", label: "매출 분석", icon: BarChart3 }] : []),
     { id: "link", label: "외부 연동", icon: ArrowLeftRight },
   ];
@@ -235,7 +267,8 @@ export default function App() {
         {tab === "search" && <RecordSearch complaints={complaints} />}
         {tab === "lost" && <Lost me={me} rows={lost} setRows={setLost} />}
         {tab === "events" && <Events me={me} rows={events} setRows={setEvents} />}
-        {tab === "lessons" && <Lessons me={me} />}
+        {tab === "lessons" && <Registrations me={me} />}
+        {tab === "worklogs" && <WorkLogs me={me} />}
         {tab === "ai" && isAI && <TodayAI me={me} onSave={(items) => setComplaints((c) => [...items, ...c])} />}
         {tab === "sales" && isAI && <Sales />}
         {tab === "link" && <LinkInfo />}
@@ -685,152 +718,299 @@ function Events({ me, rows, setRows }) {
 }
 
 /* ─────────────────────── 강습 등록·취소 */
-function Lessons({ me }) {
+/* work_logs 에 작업 기록 남기기 (강습·독서실·골프백 공통) */
+async function logWork(row) {
+  try { await supabase.from("work_logs").insert(row); } catch (e) { /* 기록 실패는 조용히 무시 */ }
+}
+
+/* ─────────────────────── 등록·취소 (강습 / 독서실 / 골프백) */
+function Registrations({ me }) {
+  const [sub, setSub] = useState("강습");
+  const subs = ["강습", "독서실", "골프백"];
+  return (
+    <div>
+      <div className="inline-flex gap-1 p-1 bg-slate-100 rounded-xl mb-4">
+        {subs.map((s) => (
+          <button key={s} onClick={() => setSub(s)}
+            className={`rounded-lg px-4 py-1.5 text-sm font-medium transition ${sub === s ? "bg-white shadow-sm text-emerald-700" : "text-slate-500"}`}>
+            {s}
+          </button>
+        ))}
+      </div>
+      {sub === "강습" && <LessonForm me={me} />}
+      {sub === "독서실" && <ReservationForm me={me} kind="독서실" options={[["개인", "독서실_개인"], ["일반", "독서실_일반"]]} seatLabel="좌석 번호" seatPh="예: 02" />}
+      {sub === "골프백" && <ReservationForm me={me} kind="골프백" options={[["상단", "골프백_상단"], ["하단", "골프백_하단"]]} seatLabel="락커 번호" seatPh="예: 007" />}
+    </div>
+  );
+}
+
+/* 강습 — 기존 자동화(lesson_jobs) 실행 + work_logs 기록 */
+function LessonForm({ me }) {
   const [cat, setCat] = useState(LESSON_CATS[0]);
   const [course, setCourse] = useState("");
-  const [action, setAction] = useState("등록"); // 등록 | 취소
-  const [dong, setDong] = useState("");
-  const [ho, setHo] = useState("");
-  const [name, setName] = useState("");
-  const [amount, setAmount] = useState("");
-  const [closed, setClosed] = useState("");
-  const [safe, setSafe] = useState(true);
-  const [log, setLog] = useState([]);
-  const [running, setRunning] = useState(false);
-  const [copiedId, setCopiedId] = useState(null);
-
-  const selectCat = (c) => { setCat(c); setCourse(""); };
-
-  const orderText = (r) => [
-    `[BYB 강습 작업 지시서]`,
-    `작업: ${r.action === "등록" ? "등록(차감)" : "취소(환불)"}`,
-    `강좌명: ${r.course}`,
-    `회원명: ${r.name}`,
-    `동/호: ${r.dong} / ${r.ho}`,
-    `금액: ${r.amount ? r.amount : "(자동 계산)"}`,
-    `휴강일: ${r.closed || "(없음)"}`,
-    `안전모드: ${r.safe ? "ON" : "OFF"}`,
-    `접수자: ${r.by} / ${r.at}`,
-  ].join("\n");
-
-  const copyOrder = (r) => {
-    navigator.clipboard?.writeText(orderText(r)).then(() => {
-      setCopiedId(r.id); setTimeout(() => setCopiedId(null), 1500);
-    });
-  };
+  const [action, setAction] = useState("등록");
+  const [dong, setDong] = useState(""); const [ho, setHo] = useState(""); const [name, setName] = useState("");
+  const [amount, setAmount] = useState(""); const [closed, setClosed] = useState(""); const [safe, setSafe] = useState(true);
+  const [running, setRunning] = useState(false); const [done, setDone] = useState(null);
 
   const run = () => {
     if (!course) { alert("강좌를 먼저 선택하세요."); return; }
     if (!name.trim()) { alert("회원 이름을 입력하세요."); return; }
     if (action === "등록" && (!dong.trim() || !ho.trim())) { alert("등록 시 동·호수는 필수입니다."); return; }
     setRunning(true);
-    const job = { action, cat, course, member: name, dong, ho, amount, closed, safe, status: "pending", by: me.id, at: nowLocal().replace("T", " ") };
-    // Supabase 'lesson_jobs' 게시판에 요청 저장 → PC 파이썬이 읽어서 BYB 실행
+    const at = nowLocal().replace("T", " ");
+    const job = { action, cat, course, member: name, dong, ho, amount, closed, safe, status: "pending", by: me.id, at };
     supabase.from("lesson_jobs").insert(job).then(({ error }) => {
       setRunning(false);
-      if (error) {
-        alert("요청 전송 실패: " + error.message + "\n(Supabase 설정 또는 인터넷 연결을 확인하세요)");
-        return;
-      }
-      setLog([{ id: Date.now(), ...job }, ...log]);
+      if (error) { alert("요청 전송 실패: " + error.message); return; }
+      logWork({ kind: "강습", action, target: course, seat: cat, member: name, dong, ho, amount, timing: closed ? `휴강 ${closed}` : "", by: me.id, at });
+      setDone(`${action} 요청 전송 완료 — PC 파이썬이 처리합니다.`);
       setDong(""); setHo(""); setName(""); setAmount(""); setClosed("");
+      setTimeout(() => setDone(null), 4000);
     });
   };
 
   return (
     <div>
       <div className="bg-sky-50 border border-sky-200 rounded-xl p-3 mb-4 text-xs text-sky-800 leading-relaxed">
-        💡 "실행"을 누르면 요청이 <b>Supabase 게시판</b>에 저장되고, 이승헌 님 PC에서 대기 중인 파이썬 프로그램이
-        이를 읽어 <b>BYB 등록·취소를 실제로 처리</b>합니다. (PC가 켜져 있고 파이썬 작업자 프로그램이 실행 중이어야 해요.)
-        안전모드 ON이면 마지막 버튼은 PC에서 직접 누르게 됩니다.
+        💡 "실행"을 누르면 요청이 Supabase에 저장되고, PC의 파이썬 작업자가 읽어 <b>BYB 강습 등록·취소를 실제로 처리</b>합니다.
       </div>
-
       <div className="flex gap-1.5 mb-4 overflow-x-auto pb-1">
         {LESSON_CATS.map((c) => (
-          <button key={c} onClick={() => selectCat(c)}
-            className={`shrink-0 text-sm font-medium px-3.5 py-1.5 rounded-full transition ${cat === c ? "bg-emerald-600 text-white" : "bg-white border border-slate-200 text-slate-500"}`}>
-            {c}
-          </button>
+          <button key={c} onClick={() => { setCat(c); setCourse(""); }}
+            className={`shrink-0 text-sm font-medium px-3.5 py-1.5 rounded-full transition ${cat === c ? "bg-emerald-600 text-white" : "bg-white border border-slate-200 text-slate-500"}`}>{c}</button>
         ))}
       </div>
-
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
-        <div>
-          <span className="text-xs font-medium text-slate-500 block mb-1.5">처리 구분</span>
-          <div className="inline-flex p-1 bg-slate-100 rounded-lg">
-            {["등록", "취소"].map((a) => (
-              <button key={a} onClick={() => setAction(a)}
-                className={`px-4 py-1.5 rounded-md text-sm font-medium transition ${action === a ? (a === "등록" ? "bg-emerald-600 text-white" : "bg-rose-500 text-white") : "text-slate-500"}`}>
-                {a === "등록" ? "등록(차감)" : "취소(환불)"}
-              </button>
-            ))}
-          </div>
-        </div>
-
+        <ActionToggle action={action} setAction={setAction} />
         <label className="block">
           <span className="text-xs font-medium text-slate-500 block mb-1.5">강좌 선택 · {cat} ({COURSES[cat].length}개)</span>
-          <select value={course} onChange={(e) => setCourse(e.target.value)}
-            className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 bg-white">
+          <select value={course} onChange={(e) => setCourse(e.target.value)} className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-emerald-500 bg-white">
             <option value="">— 강좌를 선택하세요 —</option>
             {COURSES[cat].map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
         </label>
-
-        <div className="grid grid-cols-3 gap-2">
-          <label className="block"><span className="text-xs font-medium text-slate-500 block mb-1.5">동 {action === "등록" && <b className="text-rose-500">*</b>}</span>
-            <input value={dong} onChange={(e) => setDong(e.target.value)} placeholder="예: 208"
-              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500" /></label>
-          <label className="block"><span className="text-xs font-medium text-slate-500 block mb-1.5">호수 {action === "등록" && <b className="text-rose-500">*</b>}</span>
-            <input value={ho} onChange={(e) => setHo(e.target.value)} placeholder="예: 1504"
-              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500" /></label>
-          <label className="block"><span className="text-xs font-medium text-slate-500 block mb-1.5">이름 <b className="text-rose-500">*</b></span>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="회원 성함"
-              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500" /></label>
-        </div>
-
+        <DongHoName {...{ action, dong, setDong, ho, setHo, name, setName }} />
         <div className="grid grid-cols-2 gap-2">
-          <label className="block"><span className="text-xs font-medium text-slate-500 block mb-1.5">금액 (선택)</span>
-            <input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="비우면 자동 계산"
-              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500" /></label>
-          <label className="block"><span className="text-xs font-medium text-slate-500 block mb-1.5">휴강일 (선택)</span>
-            <input value={closed} onChange={(e) => setClosed(e.target.value)} placeholder="예: 8/12, 8/19"
-              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500" /></label>
+          <Fld label="금액 (선택)"><input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="비우면 자동 계산" className="rin" /></Fld>
+          <Fld label="휴강일 (선택)"><input value={closed} onChange={(e) => setClosed(e.target.value)} placeholder="예: 8/12, 8/19" className="rin" /></Fld>
         </div>
-
         <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer select-none">
           <input type="checkbox" checked={safe} onChange={(e) => setSafe(e.target.checked)} className="w-4 h-4 rounded border-slate-300 accent-emerald-600" />
-          안전모드 (최종 환불/예약생성 버튼은 데스크톱에서 직접 클릭)
+          안전모드 (최종 버튼은 PC에서 직접 클릭)
         </label>
+        <RunButton action={action} running={running} onClick={run} label="실행" />
+        {done && <p className="text-sm text-emerald-700 text-center">✔ {done}</p>}
+      </div>
+      <style>{`.rin{width:100%;border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;font-size:13px;outline:none}.rin:focus{border-color:#10b981;box-shadow:0 0 0 3px #d1fae5}`}</style>
+    </div>
+  );
+}
 
-        <button onClick={run} disabled={running}
-          className={`w-full flex items-center justify-center gap-2 rounded-lg text-white text-sm font-medium py-2.5 transition disabled:opacity-50
-            ${action === "등록" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-rose-600 hover:bg-rose-700"}`}>
-          {running ? <><Loader2 size={16} className="animate-spin" /> 정리 중…</> : <><PlayCircle size={16} /> 실행 ({action === "등록" ? "등록" : "취소"} 지시서 생성)</>}
-        </button>
+/* 독서실·골프백 — 금액 자동계산 + 기록 (실제 BYB 처리는 직원이 계산금액으로 수행 / 자동화는 추후) */
+function ReservationForm({ me, kind, options, seatLabel, seatPh }) {
+  const [opt, setOpt] = useState(options[0][1]);
+  const [action, setAction] = useState("등록");
+  const [dateStr, setDateStr] = useState(today());
+  const [dong, setDong] = useState(""); const [ho, setHo] = useState(""); const [name, setName] = useState(""); const [seat, setSeat] = useState("");
+  const [amount, setAmount] = useState(""); const [done, setDone] = useState(null); const [saving, setSaving] = useState(false);
+  const [reception, setReception] = useState(""); const [editRec, setEditRec] = useState(false); const [recDraft, setRecDraft] = useState("");
+  const isAI = me.id === AI_ADMIN;
+  const recKey = `reception_${kind}`;
+
+  React.useEffect(() => {
+    supabase.from("settings").select("value").eq("key", recKey).maybeSingle()
+      .then(({ data }) => { if (data) setReception(data.value); });
+  }, [recKey]);
+
+  const day = dateStr ? new Date(dateStr).getDate() : null;
+  const auto = calcAmount(opt, action, day);
+  const optLabel = options.find((o) => o[1] === opt)[0];
+  const targetName = kind === "독서실" ? `${optLabel}독서실` : `${optLabel}`;
+
+  const saveReception = () => {
+    supabase.from("settings").upsert({ key: recKey, value: recDraft }).then(({ error }) => {
+      if (!error) { setReception(recDraft); setEditRec(false); }
+      else alert("저장 실패: " + error.message);
+    });
+  };
+
+  const run = () => {
+    if (!name.trim() || !dong.trim() || !ho.trim()) { alert("동·호수·이름을 입력하세요."); return; }
+    if (!seat.trim()) { alert(`${seatLabel}를 입력하세요.`); return; }
+    const amt = amount.trim() || (auto != null ? String(auto) : "");
+    setSaving(true);
+    const at = nowLocal().replace("T", " ");
+    logWork({ kind, action, target: targetName, seat, member: name, dong, ho, amount: amt, timing: `${action === "등록" ? "등록일" : "해지일"} ${dateStr}`, by: me.id, at })
+      .then(() => {
+        setSaving(false);
+        setDone(`${targetName} ${action} 기록 저장 완료 (금액 ${amt ? Number(amt).toLocaleString() + "원" : "-"})`);
+        setDong(""); setHo(""); setName(""); setSeat(""); setAmount("");
+        setTimeout(() => setDone(null), 5000);
+      });
+  };
+
+  return (
+    <div>
+      <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 text-xs text-amber-800 leading-relaxed">
+        💡 {kind}은 날짜를 고르면 <b>금액이 자동 계산</b>되고 작업 기록에 저장됩니다. (실제 BYB 처리는 계산된 금액으로 직원이 진행 — 자동 클릭은 추후 연결)
       </div>
 
-      {log.length > 0 && (
-        <div className="mt-4">
-          <p className="text-sm font-semibold text-slate-700 mb-2">작업 지시서</p>
-          <div className="space-y-2">
-            {log.map((r) => (
-              <div key={r.id} className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm">
-                <div className="flex items-center gap-2">
-                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${r.action === "등록" ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>{r.action === "등록" ? "등록(차감)" : "취소(환불)"}</span>
-                  <span className="text-xs text-slate-400">{r.cat}</span>
-                  <button onClick={() => copyOrder(r)} className="ml-auto flex items-center gap-1 text-xs text-slate-500 hover:text-emerald-600">
-                    <Copy size={13} /> {copiedId === r.id ? "복사됨!" : "복사"}
-                  </button>
-                </div>
-                <p className="text-sm font-medium mt-1">{r.course}</p>
-                <p className="text-xs text-slate-500 mt-0.5">{r.dong}동 {r.ho}호 · {r.name}
-                  {r.amount && ` · 금액 ${r.amount}`}{r.closed && ` · 휴강 ${r.closed}`} · 안전모드 {r.safe ? "ON" : "OFF"}</p>
-                <p className="text-[11px] text-slate-400 mt-1.5 font-mono">{r.at} · {r.by}</p>
-              </div>
+      <div className="bg-white rounded-xl border border-slate-200 p-3 mb-4 flex items-center gap-2 flex-wrap">
+        <span className="text-xs font-semibold text-slate-500">접수기간</span>
+        {!editRec ? (
+          <>
+            <span className="text-sm font-medium">{reception || "미설정"}</span>
+            {isAI && <button onClick={() => { setRecDraft(reception); setEditRec(true); }} className="ml-auto text-xs text-emerald-600 flex items-center gap-1"><Pencil size={12} /> 수정</button>}
+          </>
+        ) : (
+          <>
+            <input value={recDraft} onChange={(e) => setRecDraft(e.target.value)} className="flex-1 min-w-[180px] rounded-lg border border-slate-200 px-2 py-1 text-sm outline-none focus:border-emerald-500" placeholder="2026-06-15 ~ 2026-06-30" />
+            <button onClick={saveReception} className="rounded-lg bg-emerald-600 text-white text-xs px-3 py-1.5">저장</button>
+            <button onClick={() => setEditRec(false)} className="rounded-lg border border-slate-200 text-slate-500 text-xs px-3 py-1.5">취소</button>
+          </>
+        )}
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
+        <div>
+          <span className="text-xs font-medium text-slate-500 block mb-1.5">{kind === "독서실" ? "독서실 종류" : "락커 위치"}</span>
+          <div className="inline-flex p-1 bg-slate-100 rounded-lg">
+            {options.map(([label, key]) => (
+              <button key={key} onClick={() => setOpt(key)}
+                className={`px-4 py-1.5 rounded-md text-sm font-medium transition ${opt === key ? "bg-slate-800 text-white" : "text-slate-500"}`}>{label}</button>
             ))}
           </div>
         </div>
-      )}
+
+        <ActionToggle action={action} setAction={setAction} />
+
+        <div className="grid grid-cols-2 gap-2">
+          <Fld label={action === "등록" ? "등록일" : "해지일"}>
+            <input type="date" value={dateStr} onChange={(e) => setDateStr(e.target.value)} className="rin" />
+          </Fld>
+          <Fld label={seatLabel + " *"}>
+            <input value={seat} onChange={(e) => setSeat(e.target.value)} placeholder={seatPh} className="rin" />
+          </Fld>
+        </div>
+
+        <DongHoName action="등록" dong={dong} setDong={setDong} ho={ho} setHo={setHo} name={name} setName={setName} />
+
+        <div className="rounded-xl bg-slate-50 border border-slate-200 p-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-slate-500">{action === "등록" ? "차감" : "환불"} 금액 (자동)</span>
+            <span className="text-lg font-bold text-emerald-700">{auto != null ? auto.toLocaleString() + "원" : "-"}</span>
+          </div>
+          <p className="text-[11px] text-slate-400 mt-1">{targetName} · {day}일 기준 (한 달 30일, 31일은 30일로 계산)</p>
+          <label className="flex items-center gap-2 mt-2 text-xs text-slate-500">
+            직접 수정:
+            <input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={auto != null ? auto.toString() : "금액"} className="flex-1 rounded-lg border border-slate-200 px-2 py-1 text-sm outline-none focus:border-emerald-500" />
+          </label>
+        </div>
+
+        <RunButton action={action} running={saving} onClick={run} label="기록 저장" />
+        {done && <p className="text-sm text-emerald-700 text-center">✔ {done}</p>}
+      </div>
+      <style>{`.rin{width:100%;border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;font-size:13px;outline:none}.rin:focus{border-color:#10b981;box-shadow:0 0 0 3px #d1fae5}`}</style>
+    </div>
+  );
+}
+
+/* 공통 소품 */
+function ActionToggle({ action, setAction }) {
+  return (
+    <div>
+      <span className="text-xs font-medium text-slate-500 block mb-1.5">처리 구분</span>
+      <div className="inline-flex p-1 bg-slate-100 rounded-lg">
+        {["등록", "취소"].map((a) => (
+          <button key={a} onClick={() => setAction(a)}
+            className={`px-4 py-1.5 rounded-md text-sm font-medium transition ${action === a ? (a === "등록" ? "bg-emerald-600 text-white" : "bg-rose-500 text-white") : "text-slate-500"}`}>
+            {a === "등록" ? "등록(차감)" : "취소(환불)"}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+function DongHoName({ action, dong, setDong, ho, setHo, name, setName }) {
+  return (
+    <div className="grid grid-cols-3 gap-2">
+      <Fld label={`동 ${action === "등록" ? "*" : ""}`}><input value={dong} onChange={(e) => setDong(e.target.value)} placeholder="208" className="rin" /></Fld>
+      <Fld label={`호수 ${action === "등록" ? "*" : ""}`}><input value={ho} onChange={(e) => setHo(e.target.value)} placeholder="1504" className="rin" /></Fld>
+      <Fld label="이름 *"><input value={name} onChange={(e) => setName(e.target.value)} placeholder="회원 성함" className="rin" /></Fld>
+    </div>
+  );
+}
+function Fld({ label, children }) {
+  return <label className="block"><span className="text-xs font-medium text-slate-500 block mb-1.5">{label}</span>{children}</label>;
+}
+function RunButton({ action, running, onClick, label }) {
+  return (
+    <button onClick={onClick} disabled={running}
+      className={`w-full flex items-center justify-center gap-2 rounded-lg text-white text-sm font-medium py-2.5 transition disabled:opacity-50
+        ${action === "등록" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-rose-600 hover:bg-rose-700"}`}>
+      {running ? <><Loader2 size={16} className="animate-spin" /> 처리 중…</> : <><PlayCircle size={16} /> {label} ({action})</>}
+    </button>
+  );
+}
+
+/* ─────────────────────── 작업 기록 + 엑셀 다운로드 */
+function WorkLogs({ me }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState("전체");
+
+  const load = () => {
+    setLoading(true);
+    supabase.from("work_logs").select("*").order("id", { ascending: false }).limit(500)
+      .then(({ data }) => { setRows(data || []); setLoading(false); });
+  };
+  React.useEffect(load, []);
+
+  const list = rows.filter((r) => filter === "전체" || r.kind === filter);
+
+  const exportExcel = () => {
+    const data = list.map((r) => ({
+      "종류": r.kind, "구분": r.action, "대상": r.target, "좌석/락커/분류": r.seat,
+      "동": r.dong, "호": r.ho, "이름": r.member, "금액": r.amount, "비고": r.timing,
+      "처리자": r.by, "시각": r.at,
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "작업기록");
+    XLSX.writeFile(wb, `작업기록_${today()}.xlsx`);
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-base font-bold">작업 기록 <span className="text-slate-400 font-normal text-sm">({list.length})</span></h2>
+        <div className="flex gap-2">
+          <button onClick={load} className="rounded-lg border border-slate-200 text-slate-500 text-xs px-3 py-2">새로고침</button>
+          <button onClick={exportExcel} disabled={!list.length} className="flex items-center gap-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white text-xs font-medium px-3 py-2"><Upload size={13} /> 엑셀 다운로드</button>
+        </div>
+      </div>
+      <div className="flex gap-1.5 mb-3">
+        {["전체", "강습", "독서실", "골프백"].map((k) => (
+          <button key={k} onClick={() => setFilter(k)} className={`text-xs font-medium px-3 py-1.5 rounded-full ${filter === k ? "bg-emerald-600 text-white" : "bg-white border border-slate-200 text-slate-500"}`}>{k}</button>
+        ))}
+      </div>
+      {loading ? <p className="text-center text-slate-400 text-sm py-10"><Loader2 size={16} className="animate-spin inline" /> 불러오는 중…</p>
+        : !list.length ? <p className="text-center text-slate-400 text-sm py-10">기록이 없습니다.</p>
+        : <div className="space-y-2">
+            {list.map((r) => (
+              <div key={r.id} className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-600">{r.kind}</span>
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${r.action === "등록" ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>{r.action}</span>
+                  {r.amount && <span className="text-xs text-slate-500">{Number(r.amount).toLocaleString()}원</span>}
+                </div>
+                <p className="text-sm font-medium mt-1">{r.target}{r.seat ? ` · ${r.seat}` : ""}</p>
+                <p className="text-xs text-slate-500 mt-0.5">{r.dong}동 {r.ho}호 · {r.member}{r.timing ? ` · ${r.timing}` : ""}</p>
+                <p className="text-[11px] text-slate-400 mt-1.5 font-mono">{r.at} · {r.by}</p>
+              </div>
+            ))}
+          </div>}
     </div>
   );
 }
