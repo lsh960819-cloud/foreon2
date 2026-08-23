@@ -818,8 +818,8 @@ function ReservationForm({ me, kind, options, seatLabel, seatPh }) {
   const [reception, setReception] = useState(""); const [editRec, setEditRec] = useState(false); const [recDraft, setRecDraft] = useState("");
   const isAI = me.id === AI_ADMIN;
   const recKey = `reception_${kind}`;
-  // 독서실 취소는 PC 파이썬 자동 실행 지원 (등록·골프백은 기록만)
-  const canAutomate = kind === "독서실" && action === "취소";
+  // 독서실·골프백 모두 PC 파이썬(v3) 자동 실행 지원
+  const canAutomate = kind === "독서실" || kind === "골프백";
 
   React.useEffect(() => {
     supabase.from("settings").select("value").eq("key", recKey).maybeSingle()
@@ -840,24 +840,25 @@ function ReservationForm({ me, kind, options, seatLabel, seatPh }) {
 
   const run = async () => {
     if (!name.trim() || !dong.trim() || !ho.trim()) { alert("동·호수·이름을 입력하세요."); return; }
-    if (!seat.trim()) { alert(`${seatLabel}를 입력하세요.`); return; }
+    if (action === "등록" && !seat.trim()) { alert(`등록 시 ${seatLabel}는 필수입니다.`); return; }
     const amt = amount.trim() || (auto != null ? String(auto) : "");
+    const productKey = kind === "독서실" ? `${optLabel}독서실` : `골프백(${optLabel})`;
     setSaving(true);
     const at = nowLocal().replace("T", " ");
     // 기록 저장
-    await logWork({ kind, action, target: targetName, seat, member: name, dong, ho, amount: amt, timing: `${action === "등록" ? "등록일" : "해지일"} ${dateStr}${canAutomate ? " · " + (timing === "endOfToday" ? "오늘24시" : "즉시") : ""}`, by: me.id, at });
-    // 독서실 취소 → 실행 대기열(PC 자동 처리)
+    await logWork({ kind, action, target: productKey, seat, member: name, dong, ho, amount: amt, timing: `${action === "등록" ? "등록일" : "해지일"} ${dateStr}${action === "취소" ? " · " + (timing === "endOfToday" ? "오늘24시" : "즉시") : ""}`, by: me.id, at });
     if (canAutomate) {
       const { error } = await supabase.from("lesson_jobs").insert({
-        kind, action, course: optLabel, member: name, dong, ho, amount: amt,
-        timing, reason: reason || "관리사무소 요청", seat, safe: true, status: "pending", by: me.id, at,
+        kind, action, course: productKey, member: name, dong, ho, seat, amount: amt,
+        timing: action === "취소" ? timing : "", reason: reason || "관리사무소 요청",
+        safe: true, status: "pending", by: me.id, at,
       });
       setSaving(false);
       if (error) { alert("실행 요청 실패: " + error.message); return; }
-      setDone(`${targetName} 취소 요청 전송 완료 — PC 파이썬이 처리합니다 (환불 ${Number(amt).toLocaleString()}원, 안전모드).`);
+      setDone(`${productKey} ${action} 요청 전송 완료 — PC 파이썬이 처리합니다 (금액 ${amt ? Number(amt).toLocaleString() + "원" : "-"}, 안전모드).`);
     } else {
       setSaving(false);
-      setDone(`${targetName} ${action} 기록 저장 완료 (금액 ${amt ? Number(amt).toLocaleString() + "원" : "-"})`);
+      setDone(`${productKey} ${action} 기록 저장 완료 (금액 ${amt ? Number(amt).toLocaleString() + "원" : "-"})`);
     }
     setDong(""); setHo(""); setName(""); setSeat(""); setAmount(""); setReason("");
     setTimeout(() => setDone(null), 6000);
@@ -865,10 +866,9 @@ function ReservationForm({ me, kind, options, seatLabel, seatPh }) {
 
   return (
     <div>
-      <div className={`rounded-xl p-3 mb-4 text-xs leading-relaxed border ${canAutomate ? "bg-sky-50 border-sky-200 text-sky-800" : "bg-amber-50 border-amber-200 text-amber-800"}`}>
-        {canAutomate
-          ? <>💡 독서실 <b>취소</b>는 이제 <b>PC 파이썬이 실제 BYB에서 자동 처리</b>합니다. (안전모드: 최종 확인 버튼은 PC에서 직접 클릭)</>
-          : <>💡 {kind}은 날짜를 고르면 <b>금액이 자동 계산</b>되고 기록에 저장됩니다. (실제 BYB 처리는 계산된 금액으로 직원이 진행 — 자동 클릭은 추후 연결)</>}
+      <div className="rounded-xl p-3 mb-4 text-xs leading-relaxed border bg-sky-50 border-sky-200 text-sky-800">
+        💡 {kind} 등록·취소는 <b>PC 파이썬이 실제 BYB에서 자동 처리</b>합니다. 날짜를 고르면 금액이 자동 계산돼요.
+        (안전모드: 최종 확인 버튼은 PC에서 직접 클릭)
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 p-3 mb-4 flex items-center gap-2 flex-wrap">
