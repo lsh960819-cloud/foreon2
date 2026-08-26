@@ -1169,7 +1169,10 @@ function WorkLogs({ me }) {
     setRows(rows.filter((r) => r.id !== id));
   };
 
-  return ( <span className="text-slate-400 font-normal text-sm">({list.length})</span></h2>
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-base font-bold">작업 기록 <span className="text-slate-400 font-normal text-sm">({list.length})</span></h2>
         <div className="flex gap-2">
           <button onClick={load} className="rounded-lg border border-slate-200 text-slate-500 text-xs px-3 py-2">새로고침</button>
           <button onClick={exportExcel} disabled={!list.length} className="flex items-center gap-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white text-xs font-medium px-3 py-2"><Upload size={13} /> 엑셀 다운로드</button>
