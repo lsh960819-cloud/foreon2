@@ -98,6 +98,51 @@ const COURSES = {
   ],
 };
 
+/* ── 강좌 단계 선택(층→종목→반→요일→강사→시간)용 파싱 ── */
+const uniqArr = (a) => [...new Set(a)];
+const DAY_ORDER = ["화목", "수금", "토", "월", "화", "수", "목", "금", "일"];
+const daySort = (a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b);
+const timeMin = (t) => { const m = String(t).match(/(\d{1,2})시(?:\s*(\d{2})분)?/); return m ? (+m[1]) * 60 + (+(m[2] || 0)) : 0; };
+const timeSort = (a, b) => timeMin(a) - timeMin(b);
+const dayLabel = (d) => ({ 화목: "화/목", 수금: "수/금" }[d] || d);
+const FLOOR_INFO = { B1: "GX·구기 (요가·줌바·축구·농구 등)", B2: "수영장 (수영·아쿠아로빅)" };
+
+const ALL_COURSES = Object.entries(COURSES).flatMap(([cat, arr]) =>
+  arr.map((full) => {
+    const m = full.match(/^2단지\s*([^(]+)\(([^)]*)\)/);
+    if (!m) return null;
+    let sport = m[1].trim(), grp = "";
+    const di = sport.indexOf("-");
+    if (di > -1) { grp = sport.slice(di + 1); sport = sport.slice(0, di); }
+    const parts = m[2].split("/");
+    const teacher = parts[parts.length - 1];
+    let dayTime = parts[0];
+    if (parts.length === 3) { grp = parts[0]; dayTime = parts[1]; }
+    const dm = dayTime.match(/^(화목|수금|월|화|수|목|금|토|일)(.*)$/);
+    const days = dm ? dm[1] : dayTime;
+    const time = dm ? dm[2] : "";
+    const floor = /수영|아쿠아/.test(sport) ? "B2" : "B1";
+    return { full, cat, sport, grp, days, time, teacher, floor };
+  }).filter(Boolean)
+);
+
+function PickRow({ label, options, value, onPick, render }) {
+  if (!options.length) return null;
+  return (
+    <div>
+      <span className="text-xs font-medium text-slate-500 block mb-1.5">{label}</span>
+      <div className="flex flex-wrap gap-1.5">
+        {options.map((o) => (
+          <button key={o} type="button" onClick={() => onPick(o)}
+            className={`text-sm px-3 py-1.5 rounded-full border transition ${value === o ? "bg-emerald-600 border-emerald-600 text-white font-medium" : "bg-white border-slate-200 text-slate-600 hover:border-emerald-300"}`}>
+            {render ? render(o) : o}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const today = () => new Date().toISOString().slice(0, 10);
 const nowLocal = () => {
   const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
@@ -746,8 +791,35 @@ function Registrations({ me }) {
 
 /* 강습 — 기존 자동화(lesson_jobs) 실행 + work_logs 기록 */
 function LessonForm({ me }) {
-  const [cat, setCat] = useState(LESSON_CATS[0]);
-  const [course, setCourse] = useState("");
+  const [floor, setFloor] = useState("B1");
+  const [sport, setSport] = useState("");
+  const [grp, setGrp] = useState("");
+  const [days, setDays] = useState("");
+  const [teacher, setTeacher] = useState("");
+  const [time, setTime] = useState("");
+
+  /* 단계별 필터링: 층 → 종목 → 반/대상 → 요일 → 강사 → 시간 */
+  const fl = ALL_COURSES.filter((c) => c.floor === floor);
+  const sportOpts = uniqArr(fl.map((c) => c.sport));
+  const bySport = sport ? fl.filter((c) => c.sport === sport) : [];
+  const grpOpts = uniqArr(bySport.map((c) => c.grp).filter(Boolean));
+  const needGrp = grpOpts.length > 0;
+  const byGrp = needGrp ? (grp ? bySport.filter((c) => c.grp === grp) : []) : bySport;
+  const dayOpts = uniqArr(byGrp.map((c) => c.days)).sort(daySort);
+  const byDays = days ? byGrp.filter((c) => c.days === days) : [];
+  const tchOpts = uniqArr(byDays.map((c) => c.teacher));
+  const byTch = teacher ? byDays.filter((c) => c.teacher === teacher) : [];
+  const timeOpts = uniqArr(byTch.map((c) => c.time)).sort(timeSort);
+  const finals = time ? byTch.filter((c) => c.time === time) : [];
+  const picked = finals.length === 1 ? finals[0] : null;
+  const course = picked ? picked.full : "";
+  const cat = picked ? picked.cat : "";
+
+  const pickFloor = (v) => { setFloor(v); setSport(""); setGrp(""); setDays(""); setTeacher(""); setTime(""); };
+  const pickSport = (v) => { setSport(v); setGrp(""); setDays(""); setTeacher(""); setTime(""); };
+  const pickGrp = (v) => { setGrp(v); setDays(""); setTeacher(""); setTime(""); };
+  const pickDays = (v) => { setDays(v); setTeacher(""); setTime(""); };
+  const pickTch = (v) => { setTeacher(v); setTime(""); };
   const [action, setAction] = useState("등록");
   const [dong, setDong] = useState(""); const [ho, setHo] = useState(""); const [name, setName] = useState("");
   const [amount, setAmount] = useState(""); const [closed, setClosed] = useState(""); const [safe, setSafe] = useState(true);
@@ -775,24 +847,28 @@ function LessonForm({ me }) {
       <div className="bg-sky-50 border border-sky-200 rounded-xl p-3 mb-4 text-xs text-sky-800 leading-relaxed">
         💡 "실행"을 누르면 요청이 Supabase에 저장되고, PC의 파이썬 작업자가 읽어 <b>BYB 강습 등록·취소를 실제로 처리</b>합니다.
       </div>
-      <div className="flex gap-1.5 mb-4 overflow-x-auto pb-1">
-        {LESSON_CATS.map((c) => (
-          <button key={c} onClick={() => { setCat(c); setCourse(""); }}
-            className={`shrink-0 text-sm font-medium px-3.5 py-1.5 rounded-full transition ${cat === c ? "bg-emerald-600 text-white" : "bg-white border border-slate-200 text-slate-500"}`}>{c}</button>
+      <div className="flex gap-2 mb-4">
+        {["B1", "B2"].map((f) => (
+          <button key={f} onClick={() => pickFloor(f)}
+            className={`flex-1 rounded-xl border px-3 py-2.5 text-left transition ${floor === f ? "bg-emerald-600 border-emerald-600 text-white" : "bg-white border-slate-200 text-slate-600"}`}>
+            <span className="block text-sm font-bold">{f}</span>
+            <span className={`block text-[11px] ${floor === f ? "text-emerald-100" : "text-slate-400"}`}>{FLOOR_INFO[f]}</span>
+          </button>
         ))}
       </div>
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
         <ActionToggle action={action} setAction={setAction} />
-        <label className="block">
-          <span className="text-xs font-medium text-slate-500 block mb-1.5">강좌 선택 · {cat} ({COURSES[cat].length}개)</span>
-          <select value={course} onChange={(e) => setCourse(e.target.value)} className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-emerald-500 bg-white">
-            <option value="">— 강좌를 선택하세요 —</option>
-            {COURSES[cat].map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </label>
+        <PickRow label="종목 선택" options={sportOpts} value={sport} onPick={pickSport} />
+        {sport && needGrp && <PickRow label="반/대상 선택" options={grpOpts} value={grp} onPick={pickGrp} />}
+        {sport && (!needGrp || grp) && <PickRow label="요일 선택" options={dayOpts} value={days} onPick={pickDays} render={dayLabel} />}
+        {days && <PickRow label="강사 선택" options={tchOpts} value={teacher} onPick={pickTch} />}
+        {teacher && <PickRow label="시간 선택" options={timeOpts} value={time} onPick={setTime} />}
+        {course
+          ? <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-sm text-emerald-800">✔ 선택된 강좌: <b>{course}</b></div>
+          : <p className="text-xs text-slate-400">위에서 순서대로 선택하면 강좌가 확정됩니다.</p>}
         <DongHoName {...{ action, dong, setDong, ho, setHo, name, setName }} />
         <div className="grid grid-cols-2 gap-2">
-          <Fld label="금액 (선택)"><input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="비우면 자동 계산" className="rin" /></Fld>
+          <Fld label="수동 차감/환불액 (선택)"><input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="비워두면 자동 계산 (권장)" className="rin" /></Fld>
           <Fld label="휴강일 (선택)"><input value={closed} onChange={(e) => setClosed(e.target.value)} placeholder="예: 8/12, 8/19" className="rin" /></Fld>
         </div>
         <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer select-none">
