@@ -678,8 +678,23 @@ function RecordSearch({ complaints }) {
 function Lost({ me, rows, setRows }) {
   const [open, setOpen] = useState(false);
   const [v, setV] = useState({});
-  const add = () => { if (!(v.item || "").trim()) return; setRows([{ id: Date.now(), item: v.item, place: v.place || "", found: today(), by: me.id, status: "보관중" }, ...rows]); setV({}); setOpen(false); };
-  const toggle = (id) => setRows(rows.map((r) => r.id === id ? { ...r, status: r.status === "보관중" ? "반환완료" : "보관중", by: me.id } : r));
+  const [editId, setEditId] = useState(null);
+  const [editV, setEditV] = useState({});
+
+  const add = () => {
+    if (!(v.item || "").trim()) return;
+    setRows([{ id: Date.now(), item: v.item, place: v.place || "", found: today(), by: me.id, status: "보관중" }, ...rows]);
+    setV({}); setOpen(false);
+  };
+  const toggle = (id) => setRows(rows.map((r) => r.id === id ? { ...r, status: r.status === "보관중" ? "반환완료" : "보관중" } : r));
+  const startEdit = (r) => { setEditId(r.id); setEditV({ item: r.item, place: r.place }); };
+  const saveEdit = (id) => {
+    if (!editV.item.trim()) return;
+    setRows(rows.map((r) => r.id === id ? { ...r, item: editV.item, place: editV.place } : r));
+    setEditId(null);
+  };
+  const del = (id) => { if (window.confirm("이 분실물 기록을 삭제할까요?")) setRows(rows.filter((r) => r.id !== id)); };
+
   return (
     <div>
       <div className="flex items-center justify-between mb-3">
@@ -696,11 +711,30 @@ function Lost({ me, rows, setRows }) {
       )}
       <div className="space-y-2">
         {rows.map((r) => (
-          <div key={r.id} className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm flex items-start justify-between gap-3">
-            <div className="min-w-0"><p className="font-medium truncate">{r.item}</p>
-              <p className="text-xs text-slate-500 mt-0.5">{r.place} · 습득 <span className="font-mono">{r.found}</span></p>
-              <p className="text-xs text-emerald-600 mt-1">👤 {r.by}</p></div>
-            <button onClick={() => toggle(r.id)} className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${r.status === "보관중" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>{r.status}</button>
+          <div key={r.id} className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm">
+            {editId === r.id ? (
+              <div className="space-y-2">
+                <input value={editV.item} onChange={(e) => setEditV({ ...editV, item: e.target.value })} className="w-full rounded-lg border border-emerald-300 px-3 py-1.5 text-sm outline-none focus:border-emerald-500" />
+                <input value={editV.place} onChange={(e) => setEditV({ ...editV, place: e.target.value })} placeholder="습득 장소" className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-emerald-500" />
+                <div className="flex gap-2">
+                  <button onClick={() => saveEdit(r.id)} className="flex-1 rounded-lg bg-emerald-600 text-white text-xs font-medium py-1.5">저장</button>
+                  <button onClick={() => setEditId(null)} className="flex-1 rounded-lg border border-slate-200 text-slate-500 text-xs py-1.5">취소</button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-medium truncate">{r.item}</p>
+                  <p className="text-xs text-slate-500 mt-0.5">{r.place} · 습득 <span className="font-mono">{r.found}</span></p>
+                  <p className="text-xs text-emerald-600 mt-1">👤 {r.by}</p>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button onClick={() => toggle(r.id)} className={`rounded-full px-2.5 py-1 text-xs font-medium ${r.status === "보관중" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>{r.status}</button>
+                  <button onClick={() => startEdit(r)} className="text-slate-400 hover:text-emerald-600 p-1" title="수정"><Pencil size={14} /></button>
+                  <button onClick={() => del(r.id)} className="text-slate-400 hover:text-rose-600 p-1" title="삭제"><Trash2 size={14} /></button>
+                </div>
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -713,13 +747,30 @@ function Events({ me, rows, setRows }) {
   const office = me.dept === "사무실";
   const [open, setOpen] = useState(false);
   const [v, setV] = useState({ title: "", date: today(), text: "", file: null });
+  const [editId, setEditId] = useState(null);
+  const [editV, setEditV] = useState({});
+
   const onFile = (e) => {
     const f = e.target.files?.[0]; if (!f) return;
     const reader = new FileReader();
     reader.onload = (ev) => setV((s) => ({ ...s, file: { name: f.name, type: f.type, url: ev.target.result } }));
     reader.readAsDataURL(f);
   };
+  const onEditFile = (e) => {
+    const f = e.target.files?.[0]; if (!f) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => setEditV((s) => ({ ...s, file: { name: f.name, type: f.type, url: ev.target.result } }));
+    reader.readAsDataURL(f);
+  };
   const add = () => { if (!v.title.trim()) return; setRows([{ id: Date.now(), ...v, by: me.id }, ...rows]); setV({ title: "", date: today(), text: "", file: null }); setOpen(false); };
+  const startEdit = (r) => { setEditId(r.id); setEditV({ title: r.title, date: r.date, text: r.text, file: r.file || null }); };
+  const saveEdit = (id) => {
+    if (!editV.title.trim()) return;
+    setRows(rows.map((r) => r.id === id ? { ...r, ...editV } : r));
+    setEditId(null);
+  };
+  const del = (id) => { if (window.confirm("이 행사·일정을 삭제할까요?")) setRows(rows.filter((r) => r.id !== id)); };
+
   return (
     <div>
       <div className="flex items-center justify-between mb-3">
@@ -745,16 +796,41 @@ function Events({ me, rows, setRows }) {
       <div className="space-y-3">
         {rows.map((r) => (
           <div key={r.id} className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-            <div className="flex items-center gap-2 mb-1">
-              <CalendarDays size={15} className="text-emerald-600" />
-              <span className="font-semibold">{r.title}</span>
-              <span className="text-xs text-slate-400 font-mono ml-auto">{r.date}</span>
-            </div>
-            {r.text && <p className="text-sm text-slate-600 mt-1 whitespace-pre-wrap">{r.text}</p>}
-            {r.file && (r.file.type.includes("image")
-              ? <img src={r.file.url} alt="" className="mt-2 rounded-lg border border-slate-200 max-h-56" />
-              : <a href={r.file.url} download={r.file.name} className="mt-2 inline-flex items-center gap-1.5 text-sm text-sky-600 bg-sky-50 rounded-lg px-3 py-1.5"><FileText size={14} /> {r.file.name}</a>)}
-            <p className="text-[11px] text-slate-400 mt-2 font-mono">등록 · {r.by}</p>
+            {editId === r.id ? (
+              <div className="space-y-2">
+                <input value={editV.title} onChange={(e) => setEditV({ ...editV, title: e.target.value })} className="w-full rounded-lg border border-emerald-300 px-3 py-1.5 text-sm outline-none focus:border-emerald-500" />
+                <input type="date" value={editV.date} onChange={(e) => setEditV({ ...editV, date: e.target.value })} className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-emerald-500" />
+                <textarea rows={3} value={editV.text} onChange={(e) => setEditV({ ...editV, text: e.target.value })} className="w-full rounded-lg border border-slate-200 p-2.5 text-sm outline-none focus:border-emerald-500 resize-none" />
+                <label className="flex items-center gap-2 text-sm text-slate-500 cursor-pointer">
+                  <span className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 hover:bg-slate-50"><Upload size={14} /> 첨부 교체</span>
+                  <input type="file" accept=".jpg,.jpeg,.png,.pdf" onChange={onEditFile} className="hidden" />
+                  {editV.file && <span className="text-xs text-emerald-600 truncate">{editV.file.name}</span>}
+                </label>
+                <div className="flex gap-2">
+                  <button onClick={() => saveEdit(r.id)} className="flex-1 rounded-lg bg-emerald-600 text-white text-xs font-medium py-1.5">저장</button>
+                  <button onClick={() => setEditId(null)} className="flex-1 rounded-lg border border-slate-200 text-slate-500 text-xs py-1.5">취소</button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center gap-2 mb-1">
+                  <CalendarDays size={15} className="text-emerald-600" />
+                  <span className="font-semibold">{r.title}</span>
+                  <span className="text-xs text-slate-400 font-mono ml-auto">{r.date}</span>
+                  {office && (
+                    <>
+                      <button onClick={() => startEdit(r)} className="text-slate-400 hover:text-emerald-600 p-1" title="수정"><Pencil size={14} /></button>
+                      <button onClick={() => del(r.id)} className="text-slate-400 hover:text-rose-600 p-1" title="삭제"><Trash2 size={14} /></button>
+                    </>
+                  )}
+                </div>
+                {r.text && <p className="text-sm text-slate-600 mt-1 whitespace-pre-wrap">{r.text}</p>}
+                {r.file && (r.file.type.includes("image")
+                  ? <img src={r.file.url} alt="" className="mt-2 rounded-lg border border-slate-200 max-h-56" />
+                  : <a href={r.file.url} download={r.file.name} className="mt-2 inline-flex items-center gap-1.5 text-sm text-sky-600 bg-sky-50 rounded-lg px-3 py-1.5"><FileText size={14} /> {r.file.name}</a>)}
+                <p className="text-[11px] text-slate-400 mt-2 font-mono">등록 · {r.by}</p>
+              </>
+            )}
           </div>
         ))}
       </div>
@@ -1086,10 +1162,14 @@ function WorkLogs({ me }) {
     XLSX.writeFile(wb, `작업기록_${today()}.xlsx`);
   };
 
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-base font-bold">작업 기록 <span className="text-slate-400 font-normal text-sm">({list.length})</span></h2>
+  const del = async (id) => {
+    if (!window.confirm("이 작업 기록을 삭제할까요?")) return;
+    const { error } = await supabase.from("work_logs").delete().eq("id", id);
+    if (error) { alert("삭제 실패: " + error.message); return; }
+    setRows(rows.filter((r) => r.id !== id));
+  };
+
+  return ( <span className="text-slate-400 font-normal text-sm">({list.length})</span></h2>
         <div className="flex gap-2">
           <button onClick={load} className="rounded-lg border border-slate-200 text-slate-500 text-xs px-3 py-2">새로고침</button>
           <button onClick={exportExcel} disabled={!list.length} className="flex items-center gap-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white text-xs font-medium px-3 py-2"><Upload size={13} /> 엑셀 다운로드</button>
@@ -1105,10 +1185,13 @@ function WorkLogs({ me }) {
         : <div className="space-y-2">
             {list.map((r) => (
               <div key={r.id} className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-600">{r.kind}</span>
-                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${r.action === "등록" ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>{r.action}</span>
-                  {r.amount && <span className="text-xs text-slate-500">{Number(r.amount).toLocaleString()}원</span>}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-600">{r.kind}</span>
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${r.action === "등록" ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>{r.action}</span>
+                    {r.amount && <span className="text-xs text-slate-500">{Number(r.amount).toLocaleString()}원</span>}
+                  </div>
+                  <button onClick={() => del(r.id)} className="text-slate-300 hover:text-rose-500 p-1 shrink-0" title="삭제"><Trash2 size={13} /></button>
                 </div>
                 <p className="text-sm font-medium mt-1">{r.target}{r.seat ? ` · ${r.seat}` : ""}</p>
                 <p className="text-xs text-slate-500 mt-0.5">{r.dong}동 {r.ho}호 · {r.member}{r.timing ? ` · ${r.timing}` : ""}</p>
