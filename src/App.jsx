@@ -1,12 +1,9 @@
 import React, { useState, useMemo } from "react";
 import {
-  LogIn, LogOut, Search, PackageSearch, ClipboardList, CalendarDays, Sparkles, BarChart3,
+  LogIn, LogOut, Search, PackageSearch, ClipboardList, CalendarDays,
   Plus, X, User, Loader2, MessageSquareWarning, ArrowLeftRight, Inbox, Send, Upload,
   CheckCircle2, Clock, FileText, GraduationCap, PlayCircle, Pencil, Trash2, Copy
 } from "lucide-react";
-import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell
-} from "recharts";
 import * as XLSX from "xlsx";
 import { supabase } from "./supabaseClient.js";
 
@@ -23,10 +20,68 @@ const PW_OF = {
   foreon1: "Office1!26", foreon2: "Office2!26", foreon3: "Office3!26", foreon4: "Office4!26", foreon5: "Office5!26",
   foreon6: "xQ4#nZt8Bw", foreon7: "Lp9$rVq3Xm", foreon8: "Gk6&wTf1Qz", foreon9: "Rn2@Xy7Lqe",
 };
-const AI_ADMIN = "foreon4"; // AI 정리 · 매출 분석 사용 가능한 계정
+const AI_ADMIN = "foreon4"; // 관리자 계정 (수강 시작 연월 선택 · 접수기간 수정 권한)
 
 const 민원카테고리 = ["시설 고장", "이용 안내", "회원 접수", "결제·환불", "기타"];
-const 담당부서 = ["데스크", "피트니스", "골프장"];
+const 담당부서 = ["데스크", "피트니스", "골프장", "사무실"];
+
+/* ── Supabase 영속 저장 ──
+   [rows, setRows] 와 똑같이 쓰지만, 바뀐 부분을 자동으로 Supabase에 반영합니다. */
+async function syncDiff(table, prev, next, toDb) {
+  const pm = new Map(prev.map((r) => [r.id, r]));
+  const nm = new Map(next.map((r) => [r.id, r]));
+  try {
+    for (const [id, r] of nm) {
+      const old = pm.get(id);
+      if (!old) {
+        const { error } = await supabase.from(table).insert(toDb(r));
+        if (error) throw new Error("저장 실패: " + error.message);
+      } else if (JSON.stringify(toDb(old)) !== JSON.stringify(toDb(r))) {
+        const { id: _drop, ...patch } = toDb(r);
+        const { error } = await supabase.from(table).update(patch).eq("id", id);
+        if (error) throw new Error("수정 실패: " + error.message);
+      }
+    }
+    for (const [id] of pm) {
+      if (!nm.has(id)) {
+        const { error } = await supabase.from(table).delete().eq("id", id);
+        if (error) throw new Error("삭제 실패: " + error.message);
+      }
+    }
+  } catch (e) {
+    alert(`[${table}] ${e.message}`);
+  }
+}
+
+function usePersisted(table, toDb = (r) => r, fromDb = (r) => r) {
+  const [rows, setRowsState] = useState([]);
+  const rowsRef = React.useRef([]);
+  const loaded = React.useRef(false);
+  rowsRef.current = rows;
+
+  React.useEffect(() => {
+    let alive = true;
+    supabase.from(table).select("*").order("id", { ascending: false })
+      .then(({ data, error }) => {
+        if (!alive) return;
+        if (error) console.error(table, error.message);
+        const list = (data || []).map(fromDb);
+        rowsRef.current = list;
+        setRowsState(list);
+        loaded.current = true;
+      });
+    return () => { alive = false; };
+  }, [table]);
+
+  const setRows = (updater) => {
+    const prev = rowsRef.current;
+    const next = typeof updater === "function" ? updater(prev) : updater;
+    rowsRef.current = next;
+    setRowsState(next);
+    if (loaded.current) syncDiff(table, prev, next, toDb);
+  };
+  return [rows, setRows];
+}
 
 /* 강습 등록·취소 — 분류 순서 및 강좌 목록 */
 const LESSON_CATS = ["요가", "줌바", "타바타", "매트", "방송", "근력", "축구", "농구", "수영", "아쿠아로빅"];
@@ -143,6 +198,20 @@ function PickRow({ label, options, value, onPick, render }) {
   );
 }
 
+/* 수강 시작 연월 (YYYY-MM) */
+const ymNow = () => new Date().toISOString().slice(0, 7);
+const ymList = (n = 4) => {
+  const d = new Date(); d.setDate(1);
+  return Array.from({ length: n }, (_, i) => {
+    const x = new Date(d.getFullYear(), d.getMonth() + i, 1);
+    return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}`;
+  });
+};
+const ymLabel = (ym) => {
+  const [y, m] = ym.split("-");
+  return `${Number(m)}월${ym === ymNow() ? " (이번 달)" : ` (${y})`}`;
+};
+
 const today = () => new Date().toISOString().slice(0, 10);
 const nowLocal = () => {
   const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
@@ -247,25 +316,19 @@ export default function App() {
     };
   }, []);
 
-  const [complaints, setComplaints] = useState([
-    { id: 1, time: "2026-08-13 14:20", cat: "시설 고장", dong: "208", ho: "1504", name: "임정윤", phone: "", content: "여자 탈의실 온수 미지근함", action: "시설팀 점검 요청, 밸브 조정 후 정상화 안내", owner: "데스크", status: "진행 중", by: "foreon6", dept: "데스크", date: "2026-08-13" },
-    { id: 2, time: "2026-08-13 10:05", cat: "결제·환불", dong: "210", ho: "2506", name: "이건혁", phone: "", content: "스크린골프 당일 취소 환불 문의", action: "1시간 전까지 앱 취소 시 전액 환불 안내", owner: "데스크", status: "완료", by: "foreon7", dept: "데스크", date: "2026-08-13" },
-  ]);
-  const [handovers, setHandovers] = useState([
-    { id: 1, type: "인계 메모", text: "내일 오전 스크린골프 3번기 A/S 방문 예정 (10시)", by: "foreon6", dept: "데스크", at: "2026-08-13 21:40" },
-  ]);
-  const [requests, setRequests] = useState([
-    { id: 1, text: "데스크 프린터 토너 교체 요청합니다.", officeOnly: true, by: "foreon6", dept: "데스크", date: "2026-08-13", replies: [] },
-  ]);
-  const [events, setEvents] = useState([
-    { id: 1, title: "8월 회원 정기 소독 안내", date: "2026-08-20", text: "8/20(수) 오전 6~8시 커뮤니티 전 시설 소독으로 이용이 제한됩니다.", file: null, by: "foreon1" },
-  ]);
-  const [lost, setLost] = useState([
-    { id: 1, item: "검정 무선 이어폰", place: "헬스장", found: "2026-08-11", by: "foreon6", status: "보관중" },
-  ]);
+  const [complaints, setComplaints] = usePersisted("complaints");
+  const [handovers, setHandovers] = usePersisted("handovers");
+  const [requests, setRequests] = usePersisted(
+    "requests",
+    ({ officeOnly, ...r }) => ({ ...r, officeonly: officeOnly }),
+    ({ officeonly, ...r }) => ({ ...r, officeOnly: officeonly }),
+  );
+  const [events, setEvents] = usePersisted("events");
+  const [lost, setLost] = usePersisted("lost");
 
   if (!me) return <Login onLogin={login} />;
   const isAI = me.id === AI_ADMIN;
+  const isOffice = me.dept === "사무실";
 
   const tabs = [
     { id: "worklog", label: "업무일지", icon: ClipboardList },
@@ -274,7 +337,7 @@ export default function App() {
     { id: "events", label: "주요 행사·일정", icon: CalendarDays },
     { id: "lessons", label: "등록·취소", icon: GraduationCap },
     { id: "worklogs", label: "작업 기록", icon: FileText },
-    ...(isAI ? [{ id: "ai", label: "AI 카톡 정리", icon: Sparkles }, { id: "sales", label: "매출 분석", icon: BarChart3 }] : []),
+    ...(isOffice ? [{ id: "officelog", label: "사무실 업무일지", icon: ClipboardList }] : []),
     { id: "link", label: "외부 연동", icon: ArrowLeftRight },
   ];
 
@@ -314,8 +377,7 @@ export default function App() {
         {tab === "events" && <Events me={me} rows={events} setRows={setEvents} />}
         {tab === "lessons" && <Registrations me={me} />}
         {tab === "worklogs" && <WorkLogs me={me} />}
-        {tab === "ai" && isAI && <TodayAI me={me} onSave={(items) => setComplaints((c) => [...items, ...c])} />}
-        {tab === "sales" && isAI && <Sales />}
+        {tab === "officelog" && isOffice && <OfficeLog me={me} />}
         {tab === "link" && <LinkInfo />}
       </div>
     </div>
@@ -501,7 +563,6 @@ function Handover({ me, rows, setRows, complaints }) {
   const [text, setText] = useState("");
   const canSee = (dept) => me.dept === "사무실" || me.dept === dept;
   const visible = rows.filter((r) => canSee(r.dept));
-  const pending = complaints.filter((c) => c.status === "진행 중");
   const add = () => {
     if (!text.trim()) return;
     setRows([{ id: Date.now(), type: "인계 메모", text, by: me.id, dept: me.dept, at: nowLocal().replace("T", " "), hist: [], deleted: null }, ...rows]);
@@ -511,13 +572,6 @@ function Handover({ me, rows, setRows, complaints }) {
   const del = (id) => { if (window.confirm("이 인계 메모를 삭제할까요?")) setRows(rows.map((r) => r.id === id ? { ...r, deleted: { by: me.id, at: stamp() } } : r)); };
   return (
     <div className="space-y-4">
-      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
-        <p className="text-sm font-semibold text-amber-800 flex items-center gap-1.5 mb-2"><Clock size={15} /> 이전 근무 이관 건 (진행 중 민원 {pending.length})</p>
-        {pending.length ? <div className="space-y-1.5">{pending.map((c) => (
-          <div key={c.id} className="text-sm text-slate-700 bg-white rounded-lg px-3 py-2 border border-amber-100">
-            <b>{c.cat}</b> · {c.content} <span className="text-xs text-slate-400 font-mono">({c.by})</span>
-          </div>))}</div> : <p className="text-sm text-amber-700">인계할 진행 중 건이 없습니다.</p>}
-      </div>
       <div className="bg-white rounded-xl border border-slate-200 p-4">
         <p className="text-xs font-semibold text-slate-500 mb-2">인계 메모 — 오늘 처리 못한 건, 공지, 익일 예약/행사 안내 등을 자유롭게 남기세요</p>
         <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder="다음 근무자에게 전달할 내용을 적으세요"
@@ -838,6 +892,69 @@ function Events({ me, rows, setRows }) {
   );
 }
 
+/* ─────────────────────── 사무실 업무일지 (사무실 계정 전용) */
+function OfficeLog({ me }) {
+  const [rows, setRows] = usePersisted("office_logs");
+  const [text, setText] = useState("");
+  const [date, setDate] = useState(today());
+  const [editId, setEditId] = useState(null);
+  const [editText, setEditText] = useState("");
+
+  const add = () => {
+    if (!text.trim()) return;
+    setRows([{ id: Date.now(), date, text, by: me.id, at: stamp() }, ...rows]);
+    setText("");
+  };
+  const saveEdit = (id) => {
+    if (!editText.trim()) return;
+    setRows(rows.map((r) => r.id === id ? { ...r, text: editText, at: stamp() } : r));
+    setEditId(null);
+  };
+  const del = (id) => { if (window.confirm("이 업무일지를 삭제할까요?")) setRows(rows.filter((r) => r.id !== id)); };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-base font-bold">사무실 업무일지 <span className="text-slate-400 font-normal text-sm">({rows.length})</span></h2>
+      </div>
+      <div className="bg-white rounded-xl border border-slate-200 p-4 mb-4">
+        <div className="flex items-center gap-2 mb-2">
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+            className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-emerald-500" />
+          <span className="text-xs text-slate-400">사무실 인원만 열람할 수 있습니다</span>
+        </div>
+        <textarea rows={4} value={text} onChange={(e) => setText(e.target.value)} placeholder="오늘 처리한 업무, 진행 상황, 특이사항 등을 기록하세요"
+          className="w-full rounded-lg border border-slate-200 p-2.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 resize-none" />
+        <button onClick={add} className="mt-2 flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium px-4 py-2"><Send size={14} /> 기록</button>
+      </div>
+      <div className="space-y-2">
+        {rows.map((r) => (
+          <div key={r.id} className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm">
+            <div className="flex items-center gap-2 mb-1">
+              <CalendarDays size={14} className="text-emerald-600" />
+              <span className="text-sm font-semibold font-mono">{r.date}</span>
+              <span className="text-xs text-slate-400 ml-auto">{r.by}</span>
+              <button onClick={() => { setEditId(r.id); setEditText(r.text); }} className="text-slate-400 hover:text-emerald-600 p-1" title="수정"><Pencil size={13} /></button>
+              <button onClick={() => del(r.id)} className="text-slate-400 hover:text-rose-600 p-1" title="삭제"><Trash2 size={13} /></button>
+            </div>
+            {editId === r.id ? (
+              <div className="space-y-2">
+                <textarea rows={4} value={editText} onChange={(e) => setEditText(e.target.value)}
+                  className="w-full rounded-lg border border-emerald-300 p-2.5 text-sm outline-none focus:border-emerald-500 resize-none" />
+                <div className="flex gap-2">
+                  <button onClick={() => saveEdit(r.id)} className="flex-1 rounded-lg bg-emerald-600 text-white text-xs font-medium py-1.5">저장</button>
+                  <button onClick={() => setEditId(null)} className="flex-1 rounded-lg border border-slate-200 text-slate-500 text-xs py-1.5">취소</button>
+                </div>
+              </div>
+            ) : <p className="text-sm text-slate-700 whitespace-pre-wrap">{r.text}</p>}
+          </div>
+        ))}
+        {!rows.length && <p className="text-center text-slate-400 text-sm py-10">기록이 없습니다.</p>}
+      </div>
+    </div>
+  );
+}
+
 /* ─────────────────────── 강습 등록·취소 */
 /* work_logs 에 작업 기록 남기기 (강습·독서실·골프백 공통) */
 async function logWork(row) {
@@ -867,6 +984,8 @@ function Registrations({ me }) {
 
 /* 강습 — 기존 자동화(lesson_jobs) 실행 + work_logs 기록 */
 function LessonForm({ me }) {
+  const isAI = me.id === AI_ADMIN;
+  const [startYm, setStartYm] = useState(ymNow());
   const [floor, setFloor] = useState("B1");
   const [sport, setSport] = useState("");
   const [grp, setGrp] = useState("");
@@ -907,7 +1026,7 @@ function LessonForm({ me }) {
     if (action === "등록" && (!dong.trim() || !ho.trim())) { alert("등록 시 동·호수는 필수입니다."); return; }
     setRunning(true);
     const at = nowLocal().replace("T", " ");
-    const job = { action, cat, course, member: name, dong, ho, amount, closed, safe, status: "pending", by: me.id, at };
+    const job = { action, cat, course, member: name, dong, ho, amount, closed, safe, start_ym: startYm, status: "pending", by: me.id, at };
     supabase.from("lesson_jobs").insert(job).then(({ error }) => {
       setRunning(false);
       if (error) { alert("요청 전송 실패: " + error.message); return; }
@@ -920,9 +1039,6 @@ function LessonForm({ me }) {
 
   return (
     <div>
-      <div className="bg-sky-50 border border-sky-200 rounded-xl p-3 mb-4 text-xs text-sky-800 leading-relaxed">
-        💡 "실행"을 누르면 요청이 Supabase에 저장되고, PC의 파이썬 작업자가 읽어 <b>BYB 강습 등록·취소를 실제로 처리</b>합니다.
-      </div>
       <div className="flex gap-2 mb-4">
         {["B1", "B2"].map((f) => (
           <button key={f} onClick={() => pickFloor(f)}
@@ -934,6 +1050,12 @@ function LessonForm({ me }) {
       </div>
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
         <ActionToggle action={action} setAction={setAction} />
+        {isAI && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+            <PickRow label="수강 시작 연월 (어느 달 창구에 넣을지)" options={ymList()} value={startYm} onPick={setStartYm} render={ymLabel} />
+            {startYm !== ymNow() && <p className="text-[11px] text-amber-700 mt-2">선택한 달 기준으로 차감·환불액이 계산됩니다.</p>}
+          </div>
+        )}
         <PickRow label="종목 선택" options={sportOpts} value={sport} onPick={pickSport} />
         {sport && needGrp && <PickRow label="반/대상 선택" options={grpOpts} value={grp} onPick={pickGrp} />}
         {sport && (!needGrp || grp) && <PickRow label="요일 선택" options={dayOpts} value={days} onPick={pickDays} render={dayLabel} />}
@@ -967,6 +1089,7 @@ function ReservationForm({ me, kind, options, seatLabel, seatPh }) {
   const [dong, setDong] = useState(""); const [ho, setHo] = useState(""); const [name, setName] = useState(""); const [seat, setSeat] = useState("");
   const [amount, setAmount] = useState(""); const [done, setDone] = useState(null); const [saving, setSaving] = useState(false);
   const [timing, setTiming] = useState("endOfToday"); const [reason, setReason] = useState("");
+  const [safe, setSafe] = useState(true);
   const [reception, setReception] = useState(""); const [editRec, setEditRec] = useState(false); const [recDraft, setRecDraft] = useState("");
   const isAI = me.id === AI_ADMIN;
   const recKey = `reception_${kind}`;
@@ -1003,11 +1126,11 @@ function ReservationForm({ me, kind, options, seatLabel, seatPh }) {
       const { error } = await supabase.from("lesson_jobs").insert({
         kind, action, course: productKey, member: name, dong, ho, seat, amount: amt,
         timing: action === "취소" ? timing : "", reason: reason || "관리사무소 요청",
-        safe: true, status: "pending", by: me.id, at,
+        safe, status: "pending", by: me.id, at,
       });
       setSaving(false);
       if (error) { alert("실행 요청 실패: " + error.message); return; }
-      setDone(`${productKey} ${action} 요청 전송 완료 — PC 파이썬이 처리합니다 (금액 ${amt ? Number(amt).toLocaleString() + "원" : "-"}, 안전모드).`);
+      setDone(`${productKey} ${action} 요청 전송 완료 (금액 ${amt ? Number(amt).toLocaleString() + "원" : "-"}${safe ? ", 안전모드" : ""}).`);
     } else {
       setSaving(false);
       setDone(`${productKey} ${action} 기록 저장 완료 (금액 ${amt ? Number(amt).toLocaleString() + "원" : "-"})`);
@@ -1089,6 +1212,12 @@ function ReservationForm({ me, kind, options, seatLabel, seatPh }) {
           </label>
         </div>
 
+        {canAutomate && (
+          <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer select-none">
+            <input type="checkbox" checked={safe} onChange={(e) => setSafe(e.target.checked)} className="w-4 h-4 rounded border-slate-300 accent-emerald-600" />
+            안전모드 (최종 버튼은 PC에서 직접 클릭)
+          </label>
+        )}
         <RunButton action={action} running={saving} onClick={run} label={canAutomate ? "실행" : "기록 저장"} />
         {done && <p className="text-sm text-emerald-700 text-center">✔ {done}</p>}
       </div>
@@ -1206,137 +1335,6 @@ function WorkLogs({ me }) {
   );
 }
 
-
-function TodayAI({ me, onSave }) {
-  const [text, setText] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState(null);
-  const [err, setErr] = useState("");
-  const run = async () => {
-    if (!text.trim()) return; setLoading(true); setErr(""); setResult(null);
-    const prompt = `아래는 아파트 커뮤니티 데스크 직원들의 하루치 카카오톡 대화이다. 주요 민원/문의를 뽑아 정리하라.
-반드시 아래 형식의 순수 JSON 배열로만 응답한다(설명·마크다운·코드블록 금지):
-[ { "cat": "시설 고장"|"이용 안내"|"회원 접수"|"결제·환불"|"기타", "content": "핵심 내용 1~2문장", "action": "조치/대응 (없으면 빈 문자열)" } ]
-카카오톡:
-"""${text}"""`;
-    try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000, messages: [{ role: "user", content: prompt }] }),
-      });
-      const data = await res.json();
-      const raw = data.content.map((c) => (c.type === "text" ? c.text : "")).join("");
-      const items = JSON.parse(raw.replace(/```json|```/g, "").trim());
-      setResult(items.map((it, i) => ({ id: Date.now() + i, time: nowLocal().replace("T", " "), cat: it.cat || "기타", dong: "", ho: "", name: "", phone: "", content: it.content, action: it.action || "", owner: "데스크", status: "진행 중", by: me.id, dept: me.dept, date: today() })));
-    } catch (e) { setErr("정리에 실패했어요. 내용을 줄이거나 다시 시도해 주세요."); }
-    finally { setLoading(false); }
-  };
-  const save = () => { onSave(result); setResult(null); setText(""); };
-  return (
-    <div>
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-        <div className="flex items-center gap-2 mb-1"><Sparkles size={18} className="text-emerald-600" /><h2 className="font-bold">AI 카톡 정리</h2></div>
-        <p className="text-sm text-slate-500 mb-3">카카오톡 대화를 붙여넣으면 민원으로 자동 분류해 민원 대장·기록 검색에 저장합니다.</p>
-        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={7} placeholder="카카오톡 대화 내용을 붙여넣으세요…"
-          className="w-full rounded-xl border border-slate-200 p-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 resize-none" />
-        <button onClick={run} disabled={loading || !text.trim()} className="mt-3 flex items-center justify-center gap-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white text-sm font-medium px-4 py-2.5 w-full sm:w-auto">
-          {loading ? <><Loader2 size={16} className="animate-spin" /> 정리하는 중…</> : <><Sparkles size={16} /> AI로 정리하기</>}
-        </button>
-        {err && <p className="text-xs text-red-500 mt-2">{err}</p>}
-      </div>
-      {result && (
-        <div className="mt-4">
-          <div className="flex items-center justify-between mb-2"><p className="text-sm font-semibold">정리 결과 {result.length}건</p>
-            <button onClick={save} className="rounded-lg bg-slate-800 text-white text-xs font-medium px-3 py-2">민원 대장에 저장</button></div>
-          <div className="space-y-2">{result.map((r) => <ComplaintCard key={r.id} r={r} onToggle={() => {}} />)}</div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ─────────────────────── 매출 분석 (foreon4 전용) */
-const FAC_COLORS = ["#059669", "#0ea5e9", "#f59e0b", "#8b5cf6", "#ec4899", "#64748b"];
-function facilityGroup(name = "") {
-  if (name.includes("골프")) return "골프장";
-  if (name.includes("독서실")) return "독서실";
-  if (name.includes("체육관") || name.includes("농구")) return "체육관";
-  if (name.includes("테니스")) return "스크린테니스";
-  if (name.includes("탁구")) return "탁구장";
-  if (name.includes("수영")) return "수영장";
-  return "기타";
-}
-function Sales() {
-  const [data, setData] = useState(null);
-  const [err, setErr] = useState("");
-  const onFile = (e) => {
-    const file = e.target.files?.[0]; if (!file) return; setErr("");
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      try {
-        const wb = XLSX.read(new Uint8Array(ev.target.result), { type: "array", cellDates: true });
-        const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" });
-        if (!rows.length) { setErr("데이터가 비어 있어요."); return; }
-        const k = (kw, fb) => Object.keys(rows[0]).find((x) => x.includes(kw)) || fb;
-        const dK = k("결제", "결제일시"), fK = k("요금", "요금"), gK = k("대상", "대상");
-        const byDate = {}, byFac = {}; let total = 0, cancels = 0;
-        rows.forEach((r) => {
-          const raw = r[dK]; const d = raw instanceof Date ? raw.toISOString().slice(0, 10) : String(raw).slice(0, 10);
-          const fee = Number(String(r[fK]).replace(/,/g, "")) || 0; if (!d) return;
-          byDate[d] = (byDate[d] || 0) + fee;
-          const g = facilityGroup(String(r[gK])); byFac[g] = (byFac[g] || 0) + fee;
-          total += fee; if (fee < 0) cancels++;
-        });
-        setData({
-          trend: Object.entries(byDate).sort().map(([date, revenue]) => ({ date: date.slice(5), revenue })),
-          facs: Object.entries(byFac).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value),
-          total, count: rows.length, cancels,
-        });
-      } catch { setErr("엑셀을 읽지 못했어요. BYB 내보내기 파일이 맞는지 확인해 주세요."); }
-    };
-    reader.readAsArrayBuffer(file);
-  };
-  return (
-    <div>
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 mb-4">
-        <div className="flex items-center gap-2 mb-1"><BarChart3 size={18} className="text-emerald-600" /><h2 className="font-bold">매출 분석</h2></div>
-        <p className="text-sm text-slate-500 mb-3">BYB 예약·정산 엑셀을 올리면 날짜별·시설별 매출을 보여줍니다.</p>
-        <label className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium px-4 py-2.5 cursor-pointer"><Upload size={16} /> 엑셀 파일 선택
-          <input type="file" accept=".xlsx,.xls" onChange={onFile} className="hidden" /></label>
-        {err && <p className="text-xs text-red-500 mt-2">{err}</p>}
-      </div>
-      {data && (
-        <>
-          <div className="grid grid-cols-3 gap-2 mb-4">
-            <Stat label="순매출" value={won(data.total)} accent />
-            <Stat label="예약 건수" value={data.count.toLocaleString() + "건"} />
-            <Stat label="취소 건수" value={data.cancels + "건"} />
-          </div>
-          <Panel title="날짜별 매출 추이">
-            <ResponsiveContainer width="100%" height={220}>
-              <LineChart data={data.trend} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis dataKey="date" tick={{ fontSize: 11 }} stroke="#94a3b8" />
-                <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" tickFormatter={(v) => v / 1000 + "k"} />
-                <Tooltip formatter={(v) => won(v)} />
-                <Line type="monotone" dataKey="revenue" stroke="#059669" strokeWidth={2.5} dot={{ r: 3 }} />
-              </LineChart>
-            </ResponsiveContainer>
-          </Panel>
-          <Panel title="시설별 매출">
-            <ResponsiveContainer width="100%" height={Math.max(160, data.facs.length * 42)}>
-              <BarChart data={data.facs} layout="vertical" margin={{ top: 0, right: 20, left: 10, bottom: 0 }}>
-                <XAxis type="number" hide /><YAxis type="category" dataKey="name" width={70} tick={{ fontSize: 12 }} stroke="#64748b" />
-                <Tooltip formatter={(v) => won(v)} />
-                <Bar dataKey="value" radius={[0, 6, 6, 0]}>{data.facs.map((_, i) => <Cell key={i} fill={FAC_COLORS[i % FAC_COLORS.length]} />)}</Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </Panel>
-        </>
-      )}
-    </div>
-  );
-}
 
 /* ─────────────────────── 외부 연동 안내 */
 function LinkInfo() {
