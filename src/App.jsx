@@ -212,6 +212,21 @@ const ymLabel = (ym) => {
   return `${Number(m)}월${ym === ymNow() ? " (이번 달)" : ` (${y})`}`;
 };
 
+/* ── 강좌별 정원 (BYB 화면값 대신 실제 운영 정원을 사용) ── */
+const UNDER_RATIO = 0.8;   // 정원의 80% 미만이면 '정원 미달'
+
+function capacityOf(course = "") {
+  const c = String(course);
+  if (c.includes("아쿠아")) return 50;
+  if (c.includes("수영")) return 25;
+  if (c.includes("축구교실")) return c.includes("6~7세") ? 16 : 18;
+  if (c.includes("농구교실")) return c.includes("4~6학년") ? 15 : 12;
+  if (/요가|줌바|매트필라테스|방송댄스|타바타|근력/.test(c)) return 30;
+  return 30;   // 그 외 기본값
+}
+const isUnder = (s) => s.enrolled < Math.ceil(capacityOf(s.course) * UNDER_RATIO);
+const isOver = (s) => s.enrolled >= capacityOf(s.course);
+
 const today = () => new Date().toISOString().slice(0, 10);
 const nowLocal = () => {
   const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
@@ -938,8 +953,8 @@ function Home({ me, events }) {
     return true;
   };
 
-  const under = stats.filter((s) => s.capacity && s.enrolled < s.capacity);
-  const over = stats.filter((s) => s.capacity && s.enrolled >= s.capacity);
+  const under = stats.filter(isUnder);
+  const over = stats.filter(isOver);
   const noted = stats.filter((s) => (s.note || "").trim());
   const synced = stats.find((s) => s.synced_at)?.synced_at;
   const upcoming = [...(events || [])]
@@ -1061,11 +1076,12 @@ function Home({ me, events }) {
                     <div key={s.course} className="border border-slate-100 rounded-lg px-3 py-2">
                       <div className="flex items-start justify-between gap-2">
                         <span className="text-sm leading-tight">{s.course}</span>
-                        {s.capacity > 0 && (
-                          <span className={`shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full ${s.enrolled >= s.capacity ? "bg-rose-100 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>
-                            {s.enrolled}/{s.capacity}
-                          </span>
-                        )}
+                        <span className={`shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full ${
+                          isOver(s) ? "bg-rose-100 text-rose-700"
+                            : isUnder(s) ? "bg-amber-100 text-amber-700"
+                              : "bg-emerald-50 text-emerald-700"}`}>
+                          {s.enrolled}/{capacityOf(s.course)}
+                        </span>
                       </div>
                       {noteId === s.course ? (
                         <div className="flex gap-1 mt-1.5">
