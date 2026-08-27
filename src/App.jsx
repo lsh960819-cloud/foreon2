@@ -1361,6 +1361,7 @@ function TransferForm({ me }) {
       if (file) b64 = await fileToB64(file);
       const { data, error } = await supabase.from("transfer_jobs").insert({
         group_key: group, from_ym: fromYm, to_ym: toYm,
+        targets: willRun.map((c) => c.full),
         excludes, change_file: b64, change_name: file?.name || null,
         safe, status: "pending", by: me.id, at: stamp(),
       }).select().maybeSingle();
