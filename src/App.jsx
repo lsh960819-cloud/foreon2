@@ -351,7 +351,7 @@ export default function App() {
     { id: "search", label: "기록 검색", icon: Search },
     { id: "lost", label: "분실물", icon: PackageSearch },
     { id: "events", label: "주요 행사·일정", icon: CalendarDays },
-    { id: "lessons", label: "등록·취소", icon: GraduationCap },
+    { id: "lessons", label: "등록·취소·이월", icon: GraduationCap },
     { id: "worklogs", label: "작업 기록", icon: FileText },
     ...(isOffice ? [{ id: "officelog", label: "사무실 업무일지", icon: ClipboardList }] : []),
     { id: "link", label: "외부 연동", icon: ArrowLeftRight },
@@ -1295,7 +1295,7 @@ async function logWork(row) {
 /* ─────────────────────── 등록·취소 (강습 / 독서실 / 골프백) */
 function Registrations({ me }) {
   const [sub, setSub] = useState("강습");
-  const subs = ["강습", "독서실", "골프백"];
+  const subs = ["강습", "독서실", "골프백", "이월"];
   return (
     <div>
       <div className="inline-flex gap-1 p-1 bg-slate-100 rounded-xl mb-4">
@@ -1309,6 +1309,172 @@ function Registrations({ me }) {
       {sub === "강습" && <LessonForm me={me} />}
       {sub === "독서실" && <ReservationForm me={me} kind="독서실" options={[["개인", "독서실_개인"], ["일반", "독서실_일반"]]} seatLabel="좌석 번호" seatPh="예: 02" />}
       {sub === "골프백" && <ReservationForm me={me} kind="골프백" options={[["상단", "골프백_상단"], ["하단", "골프백_하단"]]} seatLabel="락커 번호" seatPh="예: 007" />}
+      {sub === "이월" && <TransferForm me={me} />}
+    </div>
+  );
+}
+
+/* ─────────────────────── 이월 (지난달 수강생 → 다음달 창구) */
+const TRANSFER_GROUPS = [
+  "2단지 요가", "2단지 줌바", "2단지 타바타", "2단지 방송댄스", "2단지 근력",
+  "수영", "아쿠아", "2단지 축구", "2단지 농구",
+];
+
+function TransferForm({ me }) {
+  const [group, setGroup] = useState("");
+  const [fromYm, setFromYm] = useState(ymNow());
+  const [toYm, setToYm] = useState(ymList()[1]);
+  const [excludes, setExcludes] = useState([]);
+  const [file, setFile] = useState(null);
+  const [safe, setSafe] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [job, setJob] = useState(null);
+
+  const isSwim = group === "수영" || group === "아쿠아";
+  const flat = (t) => String(t).replace(/[\s\-()/·.,]/g, "");
+  const words = group.trim().split(/\s+/).map(flat).filter(Boolean);
+  const targets = words.length
+    ? ALL_COURSES.filter((c) => words.every((w) => flat(c.full).includes(w)))
+    : [];
+  const willRun = targets.filter((c) => !excludes.includes(c.full));
+
+  React.useEffect(() => {
+    if (!job || job.status === "done" || job.status === "error") return;
+    const t = setInterval(async () => {
+      const { data } = await supabase.from("transfer_jobs").select("*").eq("id", job.id).maybeSingle();
+      if (data) setJob(data);
+    }, 3000);
+    return () => clearInterval(t);
+  }, [job]);
+
+  const toggle = (full) =>
+    setExcludes((x) => x.includes(full) ? x.filter((v) => v !== full) : [...x, full]);
+
+  const run = async () => {
+    if (!group) { alert("강좌 그룹을 선택해주세요."); return; }
+    if (!willRun.length) { alert("이월할 강좌가 없습니다."); return; }
+    if (fromYm === toYm) { alert("가져올 달과 넣을 달이 같습니다."); return; }
+    if (!window.confirm(`${willRun.length}개 강좌를 ${fromYm} → ${toYm} 로 이월합니다. 진행할까요?`)) return;
+    setSaving(true);
+    try {
+      let b64 = null;
+      if (file) b64 = await fileToB64(file);
+      const { data, error } = await supabase.from("transfer_jobs").insert({
+        group_key: group, from_ym: fromYm, to_ym: toYm,
+        excludes, change_file: b64, change_name: file?.name || null,
+        safe, status: "pending", by: me.id, at: stamp(),
+      }).select().maybeSingle();
+      if (error) throw new Error(error.message);
+      setJob(data);
+    } catch (e) { alert("요청 실패: " + e.message); }
+    setSaving(false);
+  };
+
+  const running = job && (job.status === "pending" || job.status === "working");
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
+      <div>
+        <span className="text-xs font-medium text-slate-500 block mb-1.5">강좌 그룹 선택</span>
+        <div className="flex flex-wrap gap-1.5">
+          {TRANSFER_GROUPS.map((g) => (
+            <button key={g} type="button" onClick={() => { setGroup(g); setExcludes([]); if (g !== "수영" && g !== "아쿠아") setFile(null); }}
+              className={`text-sm px-3 py-1.5 rounded-full border transition ${group === g ? "bg-emerald-600 border-emerald-600 text-white font-medium" : "bg-white border-slate-200 text-slate-600 hover:border-emerald-300"}`}>
+              {g}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <label className="block">
+          <span className="text-xs font-medium text-slate-500 block mb-1">가져올 달 (기존 수강생)</span>
+          <select value={fromYm} onChange={(e) => setFromYm(e.target.value)}
+            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500 bg-white">
+            {ymList(6).map((y) => <option key={y} value={y}>{y}</option>)}
+          </select>
+        </label>
+        <label className="block">
+          <span className="text-xs font-medium text-slate-500 block mb-1">넣을 달 (이월 대상)</span>
+          <select value={toYm} onChange={(e) => setToYm(e.target.value)}
+            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500 bg-white">
+            {ymList(6).map((y) => <option key={y} value={y}>{y}</option>)}
+          </select>
+        </label>
+      </div>
+
+      {isSwim && (
+        <label className="block bg-amber-50 border border-amber-200 rounded-lg p-3">
+          <span className="text-xs font-medium text-amber-900 block mb-1">반변경 명단 엑셀 (선택)</span>
+          <p className="text-[11px] text-amber-700 mb-1.5">강사명 · 시간 · 변경내용(기존 → 변경) · 회원명 · 동·호수 순서의 파일</p>
+          <input type="file" accept=".xlsx,.xls" onChange={(e) => setFile(e.target.files?.[0] || null)}
+            className="w-full text-xs file:mr-2 file:rounded-lg file:border-0 file:bg-white file:px-3 file:py-1.5 file:text-xs" />
+          {file && <span className="text-xs text-emerald-700 block mt-1">✔ {file.name}</span>}
+        </label>
+      )}
+
+      {group && (
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-xs font-medium text-slate-500">
+              대상 강좌 {willRun.length}개 {excludes.length > 0 && <span className="text-rose-500">(제외 {excludes.length}개)</span>}
+            </span>
+            {targets.length > 0 && (
+              <button type="button" onClick={() => setExcludes(excludes.length ? [] : targets.map((c) => c.full))}
+                className="text-[11px] text-slate-500 underline">
+                {excludes.length ? "제외 해제" : "전체 제외"}
+              </button>
+            )}
+          </div>
+          {targets.length ? (
+            <div className="border border-slate-200 rounded-lg divide-y divide-slate-100 max-h-64 overflow-y-auto">
+              {targets.map((c) => {
+                const off = excludes.includes(c.full);
+                return (
+                  <button key={c.full} type="button" onClick={() => toggle(c.full)}
+                    className={`flex items-center gap-2 w-full text-left px-3 py-2 text-sm ${off ? "bg-slate-50 text-slate-400 line-through" : "hover:bg-emerald-50"}`}>
+                    <span className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${off ? "border-slate-300" : "bg-emerald-600 border-emerald-600"}`}>
+                      {!off && <CheckCircle2 size={12} className="text-white" />}
+                    </span>
+                    {c.full}
+                  </button>
+                );
+              })}
+            </div>
+          ) : <p className="text-xs text-slate-400">해당하는 강좌가 없습니다.</p>}
+          <p className="text-[11px] text-slate-400 mt-1.5">수강생이 0명인 강좌는 자동으로 건너뜁니다.</p>
+        </div>
+      )}
+
+      <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer select-none">
+        <input type="checkbox" checked={safe} onChange={(e) => setSafe(e.target.checked)}
+          className="w-4 h-4 rounded border-slate-300 accent-emerald-600" />
+        안전모드 (강좌마다 [예약 생성] 은 PC에서 직접 클릭)
+      </label>
+
+      <button onClick={run} disabled={saving || running || !willRun.length}
+        className="w-full rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white text-sm font-medium py-2.5 flex items-center justify-center gap-1.5">
+        {saving || running ? <><Loader2 size={15} className="animate-spin" /> 이월 진행 중…</> : <><PlayCircle size={15} /> 이월 실행 ({willRun.length}개)</>}
+      </button>
+
+      {job && (
+        <div className={`rounded-lg p-3 text-sm ${job.status === "error" ? "bg-rose-50 border border-rose-200 text-rose-700" : "bg-slate-50 border border-slate-200"}`}>
+          {job.progress && <p className="font-medium">{job.progress}</p>}
+          {job.result && <p className="text-xs mt-1 whitespace-pre-wrap">{job.result}</p>}
+          {Array.isArray(job.detail) && job.detail.length > 0 && (
+            <details className="mt-2">
+              <summary className="text-xs cursor-pointer text-slate-500">강좌별 결과 보기</summary>
+              <div className="mt-1 space-y-0.5">
+                {job.detail.map((d, i) => (
+                  <p key={i} className="text-[11px] text-slate-600">
+                    {d.ok ? "✔" : "✖"} {d.course} — {d.msg}
+                  </p>
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
+      )}
     </div>
   );
 }
