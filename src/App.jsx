@@ -1120,13 +1120,41 @@ const fileToB64 = (file) => new Promise((res, rej) => {
   r.readAsDataURL(file);
 });
 
-function DailyExcel({ me, notes, setNotes }) {
+function DailyExcel({ me }) {
   const [a, setA] = useState(null);
   const [b, setB] = useState(null);
   const [day, setDay] = useState(today());
   const [job, setJob] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
+  const [notes, setNotes] = useState("");
+  const [saved, setSaved] = useState(null);     // { by, at }
+  const [dirty, setDirty] = useState(false);
+  const [savingNote, setSavingNote] = useState(false);
+
+  // 날짜를 바꾸면 그 날짜에 저장된 업무내용을 불러온다 (오전반이 적어둔 내용)
+  React.useEffect(() => {
+    let alive = true;
+    supabase.from("daily_notes").select("*").eq("day", day).maybeSingle()
+      .then(({ data }) => {
+        if (!alive) return;
+        setNotes(data?.text || "");
+        setSaved(data ? { by: data.by, at: data.at } : null);
+        setDirty(false);
+      });
+    return () => { alive = false; };
+  }, [day]);
+
+  const saveNotes = async () => {
+    setSavingNote(true);
+    const at = stamp();
+    const { error } = await supabase.from("daily_notes")
+      .upsert({ day, text: notes, by: me.id, at });
+    setSavingNote(false);
+    if (error) { alert("저장 실패: " + error.message); return; }
+    setSaved({ by: me.id, at });
+    setDirty(false);
+  };
 
   React.useEffect(() => {
     if (!job || job.status === "done" || job.status === "error") return;
@@ -1138,13 +1166,14 @@ function DailyExcel({ me, notes, setNotes }) {
   }, [job]);
 
   const run = async () => {
-    if (!a || !b) { alert("두 파일을 모두 선택해주세요."); return; }
+    if (!a || !b) { alert("커뮤니티이력(A)과 업무일지(B) 파일을 모두 선택해주세요."); return; }
+    if (dirty && !window.confirm("저장하지 않은 업무내용이 있습니다. 지금 화면의 내용으로 진행할까요?")) return;
     setBusy(true);
     try {
       const [fa, fb] = await Promise.all([fileToB64(a), fileToB64(b)]);
       const { data, error } = await supabase.from("excel_jobs").insert({
         day, name_a: a.name, name_b: b.name, file_a: fa, file_b: fb,
-        notes: notes || "",
+        notes,
         status: "pending", by: me.id, at: stamp(),
       }).select().maybeSingle();
       if (error) throw new Error(error.message);
@@ -1193,14 +1222,24 @@ function DailyExcel({ me, notes, setNotes }) {
             <input type="date" value={day} onChange={(e) => setDay(e.target.value)}
               className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-emerald-500" />
           </label>
-          <div>
-            <span className="text-xs font-medium text-slate-500 block mb-1">④ 업무내용 (엑셀 B77~B87 칸에 그대로 입력)</span>
-            <textarea rows={5} value={notes} onChange={(e) => setNotes(e.target.value)}
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+            <span className="text-xs font-medium text-slate-600 block mb-1">④ 업무내용 (엑셀 B77~B87 칸에 그대로 입력)</span>
+            <p className="text-[11px] text-slate-400 mb-1.5">오전반이 적고 저장해두면, 오후반이 같은 날짜를 열었을 때 그대로 이어받습니다.</p>
+            <textarea rows={6} value={notes}
+              onChange={(e) => { setNotes(e.target.value); setDirty(true); }}
               placeholder={"- 업무내용1\n- 업무내용2\n- 업무내용3"}
               className="w-full rounded-lg border border-slate-200 p-2.5 text-sm outline-none focus:border-emerald-500 resize-none font-mono" />
-            <p className="text-[11px] text-slate-400 mt-1">
-              한 줄이 한 칸입니다 · 현재 {notes.split("\n").filter((l) => l.trim()).length}줄 (최대 11줄)
-            </p>
+            <div className="flex items-center justify-between mt-1.5 gap-2">
+              <p className="text-[11px] text-slate-400">
+                한 줄이 한 칸 · {notes.split("\n").filter((l) => l.trim()).length}줄 (최대 11줄)
+                {saved && <span className="text-emerald-600"> · 저장됨 {saved.at} ({saved.by})</span>}
+                {dirty && <span className="text-amber-600"> · 저장 안 됨</span>}
+              </p>
+              <button onClick={saveNotes} disabled={savingNote || !dirty}
+                className="shrink-0 rounded-lg bg-slate-800 hover:bg-slate-900 disabled:opacity-40 text-white text-xs font-medium px-3 py-1.5">
+                {savingNote ? "저장 중…" : "업무내용 저장"}
+              </button>
+            </div>
           </div>
           <button onClick={run} disabled={busy || running}
             className="w-full rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-sm font-medium py-2.5 flex items-center justify-center gap-1.5">
@@ -1226,65 +1265,10 @@ function DailyExcel({ me, notes, setNotes }) {
 
 /* ─────────────────────── 사무실 업무일지 (사무실 계정 전용) */
 function OfficeLog({ me }) {
-  const [rows, setRows] = usePersisted("office_logs");
-  const [text, setText] = useState("");
-  const [date, setDate] = useState(today());
-  const [editId, setEditId] = useState(null);
-  const [editText, setEditText] = useState("");
-
-  const add = () => {
-    if (!text.trim()) return;
-    setRows([{ id: Date.now(), date, text, by: me.id, at: stamp() }, ...rows]);
-    setText("");
-  };
-  const saveEdit = (id) => {
-    if (!editText.trim()) return;
-    setRows(rows.map((r) => r.id === id ? { ...r, text: editText, at: stamp() } : r));
-    setEditId(null);
-  };
-  const del = (id) => { if (window.confirm("이 업무일지를 삭제할까요?")) setRows(rows.filter((r) => r.id !== id)); };
-
   return (
     <div>
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-base font-bold">사무실 업무일지 <span className="text-slate-400 font-normal text-sm">({rows.length})</span></h2>
-      </div>
-
-      <DailyExcel me={me} notes={text} setNotes={setText} />
-      <div className="bg-white rounded-xl border border-slate-200 p-4 mb-4">
-        <div className="flex items-center gap-2 mb-2">
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
-            className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-emerald-500" />
-          <span className="text-xs text-slate-400">사무실 인원만 열람할 수 있습니다</span>
-        </div>
-        <textarea rows={4} value={text} onChange={(e) => setText(e.target.value)} placeholder="오늘 처리한 업무, 진행 상황, 특이사항 등을 기록하세요"
-          className="w-full rounded-lg border border-slate-200 p-2.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 resize-none" />
-        <button onClick={add} className="mt-2 flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium px-4 py-2"><Send size={14} /> 기록</button>
-      </div>
-      <div className="space-y-2">
-        {rows.map((r) => (
-          <div key={r.id} className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm">
-            <div className="flex items-center gap-2 mb-1">
-              <CalendarDays size={14} className="text-emerald-600" />
-              <span className="text-sm font-semibold font-mono">{r.date}</span>
-              <span className="text-xs text-slate-400 ml-auto">{r.by}</span>
-              <button onClick={() => { setEditId(r.id); setEditText(r.text); }} className="text-slate-400 hover:text-emerald-600 p-1" title="수정"><Pencil size={13} /></button>
-              <button onClick={() => del(r.id)} className="text-slate-400 hover:text-rose-600 p-1" title="삭제"><Trash2 size={13} /></button>
-            </div>
-            {editId === r.id ? (
-              <div className="space-y-2">
-                <textarea rows={4} value={editText} onChange={(e) => setEditText(e.target.value)}
-                  className="w-full rounded-lg border border-emerald-300 p-2.5 text-sm outline-none focus:border-emerald-500 resize-none" />
-                <div className="flex gap-2">
-                  <button onClick={() => saveEdit(r.id)} className="flex-1 rounded-lg bg-emerald-600 text-white text-xs font-medium py-1.5">저장</button>
-                  <button onClick={() => setEditId(null)} className="flex-1 rounded-lg border border-slate-200 text-slate-500 text-xs py-1.5">취소</button>
-                </div>
-              </div>
-            ) : <p className="text-sm text-slate-700 whitespace-pre-wrap">{r.text}</p>}
-          </div>
-        ))}
-        {!rows.length && <p className="text-center text-slate-400 text-sm py-10">기록이 없습니다.</p>}
-      </div>
+      <h2 className="text-base font-bold mb-3">사무실 업무일지</h2>
+      <DailyExcel me={me} />
     </div>
   );
 }
