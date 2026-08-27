@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from "react";
 import {
-  LogIn, LogOut, Search, PackageSearch, ClipboardList, CalendarDays,
+  LogIn, LogOut, Search, PackageSearch, ClipboardList, CalendarDays, Home as HomeIcon,
   Plus, X, User, Loader2, MessageSquareWarning, ArrowLeftRight, Inbox, Send, Upload,
   CheckCircle2, Clock, FileText, GraduationCap, PlayCircle, Pencil, Trash2, Copy
 } from "lucide-react";
@@ -293,7 +293,7 @@ function clearSession() {
 
 export default function App() {
   const [me, setMe] = useState(() => loadSession());
-  const [tab, setTab] = useState("worklog");
+  const [tab, setTab] = useState("home");
 
   const login = (m) => { saveSession(m); setMe(m); };
   const logout = () => { clearSession(); setMe(null); };
@@ -331,6 +331,7 @@ export default function App() {
   const isOffice = me.dept === "사무실";
 
   const tabs = [
+    { id: "home", label: "홈", icon: HomeIcon },
     { id: "worklog", label: "업무일지", icon: ClipboardList },
     { id: "search", label: "기록 검색", icon: Search },
     { id: "lost", label: "분실물", icon: PackageSearch },
@@ -370,6 +371,7 @@ export default function App() {
           })}
         </div>
 
+        {tab === "home" && <Home me={me} events={events} />}
         {tab === "worklog" && <WorkLog me={me} complaints={complaints} setComplaints={setComplaints}
           handovers={handovers} setHandovers={setHandovers} requests={requests} setRequests={setRequests} />}
         {tab === "search" && <RecordSearch complaints={complaints} />}
@@ -892,6 +894,291 @@ function Events({ me, rows, setRows }) {
   );
 }
 
+/* ─────────────────────── 홈 (로그인 첫 화면) */
+function Home({ me, events }) {
+  const isAI = me.id === AI_ADMIN;
+  const [stats, setStats] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [job, setJob] = useState(null);
+  const [q, setQ] = useState("");
+  const [noteId, setNoteId] = useState(null);
+  const [noteDraft, setNoteDraft] = useState("");
+
+  const load = React.useCallback(async () => {
+    const { data } = await supabase.from("course_stats").select("*").order("course");
+    setStats(data || []);
+    setLoading(false);
+  }, []);
+  React.useEffect(() => { load(); }, [load]);
+
+  // 업데이트 요청 후 결과가 올 때까지 확인
+  React.useEffect(() => {
+    if (!job || job.status === "done" || job.status === "error") return;
+    const t = setInterval(async () => {
+      const { data } = await supabase.from("roster_jobs").select("*").eq("id", job.id).maybeSingle();
+      if (data) {
+        setJob(data);
+        if (data.status === "done") load();
+      }
+    }, 3000);
+    return () => clearInterval(t);
+  }, [job, load]);
+
+  const requestUpdate = async () => {
+    const { data, error } = await supabase.from("roster_jobs")
+      .insert({ status: "pending", by: me.id, at: stamp() }).select().maybeSingle();
+    if (error) { alert("요청 실패: " + error.message); return; }
+    setJob(data);
+  };
+
+  const saveNote = async (course) => {
+    const { error } = await supabase.from("course_stats").update({ note: noteDraft }).eq("course", course);
+    if (error) { alert("저장 실패: " + error.message); return; }
+    setStats(stats.map((s) => s.course === course ? { ...s, note: noteDraft } : s));
+    setNoteId(null);
+  };
+
+  const list = q ? stats.filter((s) => s.course.includes(q)) : stats;
+  const withNote = stats.filter((s) => (s.note || "").trim());
+  const full = stats.filter((s) => s.capacity && s.enrolled >= s.capacity);
+  const synced = stats.find((s) => s.synced_at)?.synced_at;
+  const upcoming = [...(events || [])]
+    .filter((e) => e.date >= today()).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 5);
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-lg font-bold">안녕하세요, {me.id}님</h2>
+        <p className="text-sm text-slate-500">{today()} · {me.dept}</p>
+      </div>
+
+      {/* 요약 */}
+      <div className="grid grid-cols-3 gap-2">
+        <Kpi label="등록 강좌" value={stats.length} />
+        <Kpi label="총 수강 인원" value={stats.reduce((a, s) => a + (s.enrolled || 0), 0)} />
+        <Kpi label="정원 마감" value={full.length} accent={full.length > 0} />
+      </div>
+
+      {/* 수강 인원 현황 */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+        <div className="flex items-center justify-between mb-1 gap-2">
+          <h3 className="font-bold flex items-center gap-1.5"><GraduationCap size={17} className="text-emerald-600" /> 강좌 수강 인원 현황</h3>
+          {isAI && (
+            <button onClick={requestUpdate} disabled={job && job.status !== "done" && job.status !== "error"}
+              className="flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-medium px-3 py-2">
+              {job && (job.status === "pending" || job.status === "working")
+                ? <><Loader2 size={13} className="animate-spin" /> 가져오는 중…</>
+                : <>수강인원 업데이트</>}
+            </button>
+          )}
+        </div>
+        <p className="text-[11px] text-slate-400 mb-3">
+          {synced ? `마지막 업데이트 ${synced} · 이후 등록·취소는 자동 반영됩니다` : "아직 업데이트한 적이 없습니다"}
+          {!isAI && " (업데이트는 foreon4 계정에서 가능)"}
+        </p>
+        {job && job.status === "error" && <p className="text-xs text-rose-600 mb-2">실패: {job.result}</p>}
+        {job && job.status === "done" && <p className="text-xs text-emerald-700 mb-2">✔ {job.found}개 강좌 정보를 가져왔습니다.</p>}
+
+        {loading ? <p className="text-sm text-slate-400 py-6 text-center">불러오는 중…</p>
+          : !stats.length ? <p className="text-sm text-slate-400 py-6 text-center">데이터가 없습니다. {isAI ? "‘수강인원 업데이트’를 눌러주세요." : "foreon4 계정에서 업데이트가 필요합니다."}</p>
+            : (
+              <>
+                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="강좌명 검색 (예: 요가, 수영)"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500 mb-2" />
+                <div className="overflow-x-auto -mx-1">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-xs text-slate-500 border-b border-slate-200">
+                        <th className="text-left font-medium py-2 px-1">강좌명</th>
+                        <th className="text-center font-medium py-2 px-1 w-20">인원</th>
+                        <th className="text-left font-medium py-2 px-1 w-28">특이사항</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {list.map((s) => {
+                        const isFull = s.capacity && s.enrolled >= s.capacity;
+                        return (
+                          <tr key={s.course} className="border-b border-slate-50">
+                            <td className="py-2 px-1">
+                              <span className="block leading-tight">{s.course}</span>
+                              {s.floor && <span className="text-[10px] text-slate-400">{s.floor}</span>}
+                            </td>
+                            <td className="text-center px-1">
+                              <span className={`text-xs font-semibold px-2 py-1 rounded-full whitespace-nowrap ${isFull ? "bg-rose-100 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>
+                                {s.enrolled}/{s.capacity}
+                              </span>
+                            </td>
+                            <td className="px-1">
+                              {noteId === s.course ? (
+                                <div className="flex gap-1">
+                                  <input value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} autoFocus
+                                    className="w-full rounded border border-emerald-300 px-1.5 py-1 text-xs outline-none" />
+                                  <button onClick={() => saveNote(s.course)} className="text-emerald-600 text-xs font-medium">저장</button>
+                                </div>
+                              ) : (
+                                <button onClick={() => { setNoteId(s.course); setNoteDraft(s.note || ""); }}
+                                  className="text-xs text-left w-full hover:text-emerald-600">
+                                  {s.note ? <span className="text-amber-700">{s.note}</span> : <span className="text-slate-300">+ 입력</span>}
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {!list.length && <p className="text-center text-slate-400 text-sm py-4">검색 결과가 없습니다.</p>}
+              </>
+            )}
+      </div>
+
+      {/* 특이사항 모아보기 */}
+      {withNote.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5">
+          <h3 className="font-bold text-amber-900 flex items-center gap-1.5 mb-2"><MessageSquareWarning size={16} /> 강좌별 특이사항 ({withNote.length})</h3>
+          <div className="space-y-1.5">
+            {withNote.map((s) => (
+              <div key={s.course} className="bg-white rounded-lg px-3 py-2 border border-amber-100 text-sm">
+                <b className="text-slate-700">{s.course}</b>
+                <p className="text-slate-600 text-xs mt-0.5">{s.note}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 다가오는 행사 */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+        <h3 className="font-bold flex items-center gap-1.5 mb-3"><CalendarDays size={17} className="text-emerald-600" /> 다가오는 행사·일정</h3>
+        {upcoming.length ? (
+          <div className="space-y-2">
+            {upcoming.map((e) => (
+              <div key={e.id} className="flex items-start gap-3 border-b border-slate-50 pb-2 last:border-0">
+                <span className="text-xs font-mono bg-emerald-50 text-emerald-700 rounded px-2 py-1 shrink-0">{e.date?.slice(5)}</span>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">{e.title}</p>
+                  {e.text && <p className="text-xs text-slate-500 truncate">{e.text}</p>}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : <p className="text-sm text-slate-400 py-4 text-center">예정된 행사가 없습니다.</p>}
+      </div>
+    </div>
+  );
+}
+function Kpi({ label, value, accent }) {
+  return (
+    <div className={`rounded-xl border p-3 text-center ${accent ? "bg-rose-50 border-rose-200" : "bg-white border-slate-200"}`}>
+      <p className="text-[11px] text-slate-500">{label}</p>
+      <p className={`text-xl font-bold ${accent ? "text-rose-600" : "text-slate-800"}`}>{value}</p>
+    </div>
+  );
+}
+
+/* 일일업무일지 자동입력 — 커뮤니티이력(A) 내용을 업무일지(B)에 채워 넣기 */
+const fileToB64 = (file) => new Promise((res, rej) => {
+  const r = new FileReader();
+  r.onload = (e) => res(e.target.result.split(",")[1]);
+  r.onerror = () => rej(new Error("파일을 읽지 못했습니다"));
+  r.readAsDataURL(file);
+});
+
+function DailyExcel({ me }) {
+  const [a, setA] = useState(null);
+  const [b, setB] = useState(null);
+  const [day, setDay] = useState(today());
+  const [job, setJob] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  React.useEffect(() => {
+    if (!job || job.status === "done" || job.status === "error") return;
+    const t = setInterval(async () => {
+      const { data } = await supabase.from("excel_jobs").select("*").eq("id", job.id).maybeSingle();
+      if (data) setJob(data);
+    }, 3000);
+    return () => clearInterval(t);
+  }, [job]);
+
+  const run = async () => {
+    if (!a || !b) { alert("두 파일을 모두 선택해주세요."); return; }
+    setBusy(true);
+    try {
+      const [fa, fb] = await Promise.all([fileToB64(a), fileToB64(b)]);
+      const { data, error } = await supabase.from("excel_jobs").insert({
+        day, name_a: a.name, name_b: b.name, file_a: fa, file_b: fb,
+        status: "pending", by: me.id, at: stamp(),
+      }).select().maybeSingle();
+      if (error) throw new Error(error.message);
+      setJob(data);
+    } catch (e) {
+      alert("요청 실패: " + e.message);
+    }
+    setBusy(false);
+  };
+
+  const download = () => {
+    const bin = atob(job.result_file);
+    const buf = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    const url = URL.createObjectURL(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+    const link = document.createElement("a");
+    link.href = url; link.download = job.result_name || "업무일지.xlsx";
+    link.click(); URL.revokeObjectURL(url);
+  };
+
+  const running = job && (job.status === "pending" || job.status === "working");
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 mb-4 overflow-hidden">
+      <button onClick={() => setOpen(!open)} className="w-full flex items-center justify-between px-4 py-3 hover:bg-slate-50">
+        <span className="text-sm font-semibold flex items-center gap-1.5"><FileText size={15} className="text-emerald-600" /> 일일업무일지 자동입력</span>
+        <span className="text-xs text-slate-400">{open ? "닫기" : "열기"}</span>
+      </button>
+      {open && (
+        <div className="px-4 pb-4 space-y-3 border-t border-slate-100 pt-3">
+          <p className="text-[11px] text-slate-500 leading-relaxed">
+            바이비 <b>커뮤니티이력</b> 엑셀(A)과 <b>월별 업무일지</b> 엑셀(B)을 올리면, 해당 날짜의 수입현황이 B에 채워진 새 파일을 받습니다. 원본은 변경되지 않습니다.
+          </p>
+          <label className="block">
+            <span className="text-xs font-medium text-slate-500 block mb-1">① 커뮤니티이력 엑셀 (A)</span>
+            <input type="file" accept=".xlsx,.xls" onChange={(e) => setA(e.target.files?.[0] || null)}
+              className="w-full text-xs file:mr-2 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-xs" />
+          </label>
+          <label className="block">
+            <span className="text-xs font-medium text-slate-500 block mb-1">② 업무일지 엑셀 (B) — 내용이 채워질 파일</span>
+            <input type="file" accept=".xlsx,.xlsm" onChange={(e) => setB(e.target.files?.[0] || null)}
+              className="w-full text-xs file:mr-2 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-xs" />
+          </label>
+          <label className="block">
+            <span className="text-xs font-medium text-slate-500 block mb-1">③ 처리할 날짜</span>
+            <input type="date" value={day} onChange={(e) => setDay(e.target.value)}
+              className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-emerald-500" />
+          </label>
+          <button onClick={run} disabled={busy || running}
+            className="w-full rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-sm font-medium py-2.5 flex items-center justify-center gap-1.5">
+            {busy || running ? <><Loader2 size={15} className="animate-spin" /> 처리 중… (PC 작업자 실행)</> : <><PlayCircle size={15} /> 자동 입력 실행</>}
+          </button>
+
+          {job && job.status === "error" && (
+            <p className="text-xs text-rose-600 bg-rose-50 rounded-lg p-2.5 whitespace-pre-wrap">실패: {job.error}</p>
+          )}
+          {job && job.status === "done" && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 space-y-2">
+              <p className="text-sm text-emerald-800">✔ 완료 — {job.result_name}</p>
+              <button onClick={download} className="w-full rounded-lg bg-emerald-600 text-white text-sm font-medium py-2">파일 다운로드</button>
+              {job.report && <details><summary className="text-xs text-emerald-700 cursor-pointer">검증 리포트 보기</summary>
+                <pre className="text-[10px] text-slate-600 whitespace-pre-wrap mt-1 max-h-48 overflow-auto">{job.report}</pre></details>}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─────────────────────── 사무실 업무일지 (사무실 계정 전용) */
 function OfficeLog({ me }) {
   const [rows, setRows] = usePersisted("office_logs");
@@ -917,6 +1204,8 @@ function OfficeLog({ me }) {
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-base font-bold">사무실 업무일지 <span className="text-slate-400 font-normal text-sm">({rows.length})</span></h2>
       </div>
+
+      <DailyExcel me={me} />
       <div className="bg-white rounded-xl border border-slate-200 p-4 mb-4">
         <div className="flex items-center gap-2 mb-2">
           <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
