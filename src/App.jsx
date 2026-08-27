@@ -213,14 +213,6 @@ const ymLabel = (ym) => {
 };
 
 const today = () => new Date().toISOString().slice(0, 10);
-const monthStart = (offset = 0) => {
-  const d = new Date(); const x = new Date(d.getFullYear(), d.getMonth() + offset, 1);
-  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-01`;
-};
-const monthEnd = (offset = 0) => {
-  const d = new Date(); const x = new Date(d.getFullYear(), d.getMonth() + offset + 1, 0);
-  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
-};
 const nowLocal = () => {
   const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
   return d.toISOString().slice(0, 16);
@@ -912,9 +904,6 @@ function Home({ me, events }) {
   const [noteId, setNoteId] = useState(null);
   const [noteDraft, setNoteDraft] = useState("");
   const [adding, setAdding] = useState(false);
-  const [showPeriod, setShowPeriod] = useState(false);
-  const [pStart, setPStart] = useState(monthStart());
-  const [pEnd, setPEnd] = useState(monthEnd());
   const [pick, setPick] = useState("");        // 특이사항 등록용 강좌 검색어
   const [picked, setPicked] = useState(null);
   const [newNote, setNewNote] = useState("");
@@ -937,10 +926,8 @@ function Home({ me, events }) {
 
   const requestUpdate = async () => {
     const { data, error } = await supabase.from("roster_jobs")
-      .insert({ status: "pending", by: me.id, at: stamp(), period_start: pStart, period_end: pEnd })
-      .select().maybeSingle();
+      .insert({ status: "pending", by: me.id, at: stamp() }).select().maybeSingle();
     if (error) { alert("요청 실패: " + error.message); return; }
-    setShowPeriod(false);
     setJob(data);
   };
 
@@ -994,40 +981,13 @@ function Home({ me, events }) {
           <p className="text-sm text-slate-500">{today()} · {me.dept}</p>
         </div>
         {isAI && (
-          <button onClick={() => setShowPeriod(!showPeriod)} disabled={job && (job.status === "pending" || job.status === "working")}
+          <button onClick={requestUpdate} disabled={job && (job.status === "pending" || job.status === "working")}
             className="shrink-0 flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-medium px-3 py-2">
             {job && (job.status === "pending" || job.status === "working")
               ? <><Loader2 size={13} className="animate-spin" /> 가져오는 중…</> : "수강인원 업데이트"}
           </button>
         )}
       </div>
-
-      {isAI && showPeriod && (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 space-y-2.5">
-          <p className="text-sm font-semibold text-emerald-900">신청 기간 설정</p>
-          <p className="text-[11px] text-emerald-700">이 기간에 신청받는 강좌만 조회합니다. 보통 이번 달 1일 ~ 말일이면 됩니다.</p>
-          <div className="flex items-center gap-2">
-            <input type="date" value={pStart} onChange={(e) => setPStart(e.target.value)}
-              className="flex-1 rounded-lg border border-slate-200 px-2.5 py-2 text-sm outline-none focus:border-emerald-500" />
-            <span className="text-slate-400">→</span>
-            <input type="date" value={pEnd} onChange={(e) => setPEnd(e.target.value)}
-              className="flex-1 rounded-lg border border-slate-200 px-2.5 py-2 text-sm outline-none focus:border-emerald-500" />
-          </div>
-          <div className="flex gap-2">
-            <button onClick={() => { setPStart(monthStart()); setPEnd(monthEnd()); }}
-              className="rounded-lg border border-emerald-300 text-emerald-700 text-xs px-3 py-1.5">이번 달</button>
-            <button onClick={() => { setPStart(monthStart(1)); setPEnd(monthEnd(1)); }}
-              className="rounded-lg border border-emerald-300 text-emerald-700 text-xs px-3 py-1.5">다음 달</button>
-          </div>
-          <div className="flex gap-2 pt-1">
-            <button onClick={requestUpdate} className="flex-1 rounded-lg bg-emerald-600 text-white text-sm font-medium py-2">조회 시작</button>
-            <button onClick={() => setShowPeriod(false)} className="flex-1 rounded-lg border border-slate-200 text-slate-500 text-sm py-2">취소</button>
-          </div>
-        </div>
-      )}
-
-      {job && job.status === "error" && <p className="text-xs text-rose-600 bg-rose-50 rounded-lg p-2">실패: {job.result}</p>}
-      {job && job.status === "done" && <p className="text-xs text-emerald-700 bg-emerald-50 rounded-lg p-2">✔ {job.found}개 강좌를 가져왔습니다.</p>}
 
       {/* 요약 카드 — 누르면 목록이 펼쳐집니다 */}
       <div className="grid grid-cols-3 gap-2">
