@@ -213,6 +213,14 @@ const ymLabel = (ym) => {
 };
 
 const today = () => new Date().toISOString().slice(0, 10);
+const monthStart = (offset = 0) => {
+  const d = new Date(); const x = new Date(d.getFullYear(), d.getMonth() + offset, 1);
+  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-01`;
+};
+const monthEnd = (offset = 0) => {
+  const d = new Date(); const x = new Date(d.getFullYear(), d.getMonth() + offset + 1, 0);
+  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+};
 const nowLocal = () => {
   const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
   return d.toISOString().slice(0, 16);
@@ -904,6 +912,9 @@ function Home({ me, events }) {
   const [noteId, setNoteId] = useState(null);
   const [noteDraft, setNoteDraft] = useState("");
   const [adding, setAdding] = useState(false);
+  const [showPeriod, setShowPeriod] = useState(false);
+  const [pStart, setPStart] = useState(monthStart());
+  const [pEnd, setPEnd] = useState(monthEnd());
   const [pick, setPick] = useState("");        // 특이사항 등록용 강좌 검색어
   const [picked, setPicked] = useState(null);
   const [newNote, setNewNote] = useState("");
@@ -926,8 +937,10 @@ function Home({ me, events }) {
 
   const requestUpdate = async () => {
     const { data, error } = await supabase.from("roster_jobs")
-      .insert({ status: "pending", by: me.id, at: stamp() }).select().maybeSingle();
+      .insert({ status: "pending", by: me.id, at: stamp(), period_start: pStart, period_end: pEnd })
+      .select().maybeSingle();
     if (error) { alert("요청 실패: " + error.message); return; }
+    setShowPeriod(false);
     setJob(data);
   };
 
@@ -981,13 +994,37 @@ function Home({ me, events }) {
           <p className="text-sm text-slate-500">{today()} · {me.dept}</p>
         </div>
         {isAI && (
-          <button onClick={requestUpdate} disabled={job && (job.status === "pending" || job.status === "working")}
+          <button onClick={() => setShowPeriod(!showPeriod)} disabled={job && (job.status === "pending" || job.status === "working")}
             className="shrink-0 flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-medium px-3 py-2">
             {job && (job.status === "pending" || job.status === "working")
               ? <><Loader2 size={13} className="animate-spin" /> 가져오는 중…</> : "수강인원 업데이트"}
           </button>
         )}
       </div>
+
+      {isAI && showPeriod && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 space-y-2.5">
+          <p className="text-sm font-semibold text-emerald-900">신청 기간 설정</p>
+          <p className="text-[11px] text-emerald-700">이 기간에 신청받는 강좌만 조회합니다. 보통 이번 달 1일 ~ 말일이면 됩니다.</p>
+          <div className="flex items-center gap-2">
+            <input type="date" value={pStart} onChange={(e) => setPStart(e.target.value)}
+              className="flex-1 rounded-lg border border-slate-200 px-2.5 py-2 text-sm outline-none focus:border-emerald-500" />
+            <span className="text-slate-400">→</span>
+            <input type="date" value={pEnd} onChange={(e) => setPEnd(e.target.value)}
+              className="flex-1 rounded-lg border border-slate-200 px-2.5 py-2 text-sm outline-none focus:border-emerald-500" />
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => { setPStart(monthStart()); setPEnd(monthEnd()); }}
+              className="rounded-lg border border-emerald-300 text-emerald-700 text-xs px-3 py-1.5">이번 달</button>
+            <button onClick={() => { setPStart(monthStart(1)); setPEnd(monthEnd(1)); }}
+              className="rounded-lg border border-emerald-300 text-emerald-700 text-xs px-3 py-1.5">다음 달</button>
+          </div>
+          <div className="flex gap-2 pt-1">
+            <button onClick={requestUpdate} className="flex-1 rounded-lg bg-emerald-600 text-white text-sm font-medium py-2">조회 시작</button>
+            <button onClick={() => setShowPeriod(false)} className="flex-1 rounded-lg border border-slate-200 text-slate-500 text-sm py-2">취소</button>
+          </div>
+        </div>
+      )}
 
       {job && job.status === "error" && <p className="text-xs text-rose-600 bg-rose-50 rounded-lg p-2">실패: {job.result}</p>}
       {job && job.status === "done" && <p className="text-xs text-emerald-700 bg-emerald-50 rounded-lg p-2">✔ {job.found}개 강좌를 가져왔습니다.</p>}
@@ -1304,35 +1341,21 @@ function Registrations({ me }) {
 function LessonForm({ me }) {
   const isAI = me.id === AI_ADMIN;
   const [startYm, setStartYm] = useState(ymNow());
-  const [floor, setFloor] = useState("B1");
-  const [sport, setSport] = useState("");
-  const [grp, setGrp] = useState("");
-  const [days, setDays] = useState("");
-  const [teacher, setTeacher] = useState("");
-  const [time, setTime] = useState("");
+  const [q, setQ] = useState("");
+  const [picked, setPicked] = useState(null);
 
-  /* 단계별 필터링: 층 → 종목 → 반/대상 → 요일 → 강사 → 시간 */
-  const fl = ALL_COURSES.filter((c) => c.floor === floor);
-  const sportOpts = uniqArr(fl.map((c) => c.sport));
-  const bySport = sport ? fl.filter((c) => c.sport === sport) : [];
-  const grpOpts = uniqArr(bySport.map((c) => c.grp).filter(Boolean));
-  const needGrp = grpOpts.length > 0;
-  const byGrp = needGrp ? (grp ? bySport.filter((c) => c.grp === grp) : []) : bySport;
-  const dayOpts = uniqArr(byGrp.map((c) => c.days)).sort(daySort);
-  const byDays = days ? byGrp.filter((c) => c.days === days) : [];
-  const tchOpts = uniqArr(byDays.map((c) => c.teacher));
-  const byTch = teacher ? byDays.filter((c) => c.teacher === teacher) : [];
-  const timeOpts = uniqArr(byTch.map((c) => c.time)).sort(timeSort);
-  const finals = time ? byTch.filter((c) => c.time === time) : [];
-  const picked = finals.length === 1 ? finals[0] : null;
+  /* 강좌명 검색 — 띄어쓰기 무시, 여러 단어 모두 포함하는 강좌를 찾는다 */
+  const flatten = (t) => String(t).replace(/[\s\-()/·.,]/g, "");
+  const words = q.trim().split(/\s+/).map(flatten).filter(Boolean);
+  const hits = words.length
+    ? ALL_COURSES.filter((c) => {
+        const flat = flatten(c.full);
+        return words.every((w) => flat.includes(w));
+      }).slice(0, 30)
+    : [];
   const course = picked ? picked.full : "";
   const cat = picked ? picked.cat : "";
 
-  const pickFloor = (v) => { setFloor(v); setSport(""); setGrp(""); setDays(""); setTeacher(""); setTime(""); };
-  const pickSport = (v) => { setSport(v); setGrp(""); setDays(""); setTeacher(""); setTime(""); };
-  const pickGrp = (v) => { setGrp(v); setDays(""); setTeacher(""); setTime(""); };
-  const pickDays = (v) => { setDays(v); setTeacher(""); setTime(""); };
-  const pickTch = (v) => { setTeacher(v); setTime(""); };
   const [action, setAction] = useState("등록");
   const [dong, setDong] = useState(""); const [ho, setHo] = useState(""); const [name, setName] = useState("");
   const [amount, setAmount] = useState(""); const [closed, setClosed] = useState(""); const [safe, setSafe] = useState(true);
@@ -1357,15 +1380,6 @@ function LessonForm({ me }) {
 
   return (
     <div>
-      <div className="flex gap-2 mb-4">
-        {["B1", "B2"].map((f) => (
-          <button key={f} onClick={() => pickFloor(f)}
-            className={`flex-1 rounded-xl border px-3 py-2.5 text-left transition ${floor === f ? "bg-emerald-600 border-emerald-600 text-white" : "bg-white border-slate-200 text-slate-600"}`}>
-            <span className="block text-sm font-bold">{f}</span>
-            <span className={`block text-[11px] ${floor === f ? "text-emerald-100" : "text-slate-400"}`}>{FLOOR_INFO[f]}</span>
-          </button>
-        ))}
-      </div>
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
         <ActionToggle action={action} setAction={setAction} />
         {isAI && (
@@ -1374,14 +1388,39 @@ function LessonForm({ me }) {
             {startYm !== ymNow() && <p className="text-[11px] text-amber-700 mt-2">선택한 달 기준으로 차감·환불액이 계산됩니다.</p>}
           </div>
         )}
-        <PickRow label="종목 선택" options={sportOpts} value={sport} onPick={pickSport} />
-        {sport && needGrp && <PickRow label="반/대상 선택" options={grpOpts} value={grp} onPick={pickGrp} />}
-        {sport && (!needGrp || grp) && <PickRow label="요일 선택" options={dayOpts} value={days} onPick={pickDays} render={dayLabel} />}
-        {days && <PickRow label="강사 선택" options={tchOpts} value={teacher} onPick={pickTch} />}
-        {teacher && <PickRow label="시간 선택" options={timeOpts} value={time} onPick={setTime} />}
-        {course
-          ? <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-sm text-emerald-800">✔ 선택된 강좌: <b>{course}</b></div>
-          : <p className="text-xs text-slate-400">위에서 순서대로 선택하면 강좌가 확정됩니다.</p>}
+
+        <div>
+          <span className="text-xs font-medium text-slate-500 block mb-1.5">강좌 검색</span>
+          <div className="relative">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input value={q} onChange={(e) => { setQ(e.target.value); setPicked(null); }}
+              placeholder="예: 2단지 요가 / 수영 화목 07 / 요가 박상희"
+              className="w-full rounded-lg border border-slate-200 pl-9 pr-8 py-2.5 text-sm outline-none focus:border-emerald-500" />
+            {q && <button onClick={() => { setQ(""); setPicked(null); }}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400"><X size={15} /></button>}
+          </div>
+
+          {picked ? (
+            <div className="mt-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2.5 flex items-start justify-between gap-2">
+              <span className="text-sm text-emerald-800">✔ <b>{course}</b></span>
+              <button onClick={() => setPicked(null)} className="text-xs text-emerald-700 shrink-0 underline">변경</button>
+            </div>
+          ) : q.trim() ? (
+            hits.length ? (
+              <div className="mt-2 border border-slate-200 rounded-lg divide-y divide-slate-100 max-h-72 overflow-y-auto">
+                <p className="text-[11px] text-slate-400 px-3 py-1.5 bg-slate-50">{hits.length}개 검색됨 — 강좌를 누르세요</p>
+                {hits.map((c) => (
+                  <button key={c.full} onClick={() => { setPicked(c); setQ(c.full); }}
+                    className="block w-full text-left px-3 py-2 text-sm hover:bg-emerald-50">
+                    {c.full}
+                    <span className="block text-[10px] text-slate-400">{c.floor} · {c.cat}</span>
+                  </button>
+                ))}
+              </div>
+            ) : <p className="text-xs text-slate-400 mt-2">검색 결과가 없습니다. 단어를 줄여보세요 (예: "요가").</p>
+          ) : <p className="text-[11px] text-slate-400 mt-1.5">강좌명 일부만 입력해도 됩니다. 여러 단어를 띄어 쓰면 모두 포함된 강좌를 찾습니다.</p>}
+        </div>
+
         <DongHoName {...{ action, dong, setDong, ho, setHo, name, setName }} />
         <div className="grid grid-cols-2 gap-2">
           <Fld label="수동 차감/환불액 (선택)"><input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="비워두면 자동 계산 (권장)" className="rin" /></Fld>
@@ -1459,11 +1498,6 @@ function ReservationForm({ me, kind, options, seatLabel, seatPh }) {
 
   return (
     <div>
-      <div className="rounded-xl p-3 mb-4 text-xs leading-relaxed border bg-sky-50 border-sky-200 text-sky-800">
-        💡 {kind} 등록·취소는 <b>PC 파이썬이 실제 BYB에서 자동 처리</b>합니다. 날짜를 고르면 금액이 자동 계산돼요.
-        (안전모드: 최종 확인 버튼은 PC에서 직접 클릭)
-      </div>
-
       <div className="bg-white rounded-xl border border-slate-200 p-3 mb-4 flex items-center gap-2 flex-wrap">
         <span className="text-xs font-semibold text-slate-500">접수기간</span>
         {!editRec ? (
