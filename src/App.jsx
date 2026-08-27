@@ -1442,7 +1442,7 @@ function TransferForm({ me }) {
               })}
             </div>
           ) : <p className="text-xs text-slate-400">해당하는 강좌가 없습니다.</p>}
-          <p className="text-[11px] text-slate-400 mt-1.5">수강생이 0명인 강좌는 자동으로 건너뜁니다.</p>
+          <p className="text-[11px] text-slate-400 mt-1.5">수강생이 0명인 강좌는 자동으로 건너뜁니다. 반변경자는 기존 반에서 <b>제외만</b> 되며, 새 반 등록은 직접 해주세요.</p>
         </div>
       )}
 
@@ -1466,9 +1466,14 @@ function TransferForm({ me }) {
               <summary className="text-xs cursor-pointer text-slate-500">강좌별 결과 보기</summary>
               <div className="mt-1 space-y-0.5">
                 {job.detail.map((d, i) => (
-                  <p key={i} className="text-[11px] text-slate-600">
-                    {d.ok ? "✔" : "✖"} {d.course} — {d.msg}
-                  </p>
+                  <div key={i}>
+                    <p className="text-[11px] text-slate-600">
+                      {d.ok ? "✔" : "✖"} {d.course} — {d.msg}
+                    </p>
+                    {d.manual && d.manual.length > 0 && (
+                      <p className="text-[11px] text-amber-700 pl-3">↳ 수동 등록 필요: {d.manual.join(", ")}</p>
+                    )}
+                  </div>
                 ))}
               </div>
             </details>
