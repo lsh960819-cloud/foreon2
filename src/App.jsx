@@ -900,9 +900,13 @@ function Home({ me, events }) {
   const [stats, setStats] = useState([]);
   const [loading, setLoading] = useState(true);
   const [job, setJob] = useState(null);
-  const [q, setQ] = useState("");
+  const [view, setView] = useState(null);      // null | "under" | "over" | "note"
   const [noteId, setNoteId] = useState(null);
   const [noteDraft, setNoteDraft] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [pick, setPick] = useState("");        // 특이사항 등록용 강좌 검색어
+  const [picked, setPicked] = useState(null);
+  const [newNote, setNewNote] = useState("");
 
   const load = React.useCallback(async () => {
     const { data } = await supabase.from("course_stats").select("*").order("course");
@@ -911,15 +915,11 @@ function Home({ me, events }) {
   }, []);
   React.useEffect(() => { load(); }, [load]);
 
-  // 업데이트 요청 후 결과가 올 때까지 확인
   React.useEffect(() => {
     if (!job || job.status === "done" || job.status === "error") return;
     const t = setInterval(async () => {
       const { data } = await supabase.from("roster_jobs").select("*").eq("id", job.id).maybeSingle();
-      if (data) {
-        setJob(data);
-        if (data.status === "done") load();
-      }
+      if (data) { setJob(data); if (data.status === "done") load(); }
     }, 3000);
     return () => clearInterval(t);
   }, [job, load]);
@@ -931,120 +931,163 @@ function Home({ me, events }) {
     setJob(data);
   };
 
-  const saveNote = async (course) => {
-    const { error } = await supabase.from("course_stats").update({ note: noteDraft }).eq("course", course);
-    if (error) { alert("저장 실패: " + error.message); return; }
-    setStats(stats.map((s) => s.course === course ? { ...s, note: noteDraft } : s));
-    setNoteId(null);
+  const saveNote = async (course, text) => {
+    const { error } = await supabase.from("course_stats").update({ note: text }).eq("course", course);
+    if (error) { alert("저장 실패: " + error.message); return false; }
+    setStats((s) => s.map((x) => x.course === course ? { ...x, note: text } : x));
+    return true;
   };
 
-  const list = q ? stats.filter((s) => s.course.includes(q)) : stats;
-  const withNote = stats.filter((s) => (s.note || "").trim());
-  const full = stats.filter((s) => s.capacity && s.enrolled >= s.capacity);
+  const under = stats.filter((s) => s.capacity && s.enrolled < s.capacity);
+  const over = stats.filter((s) => s.capacity && s.enrolled >= s.capacity);
+  const noted = stats.filter((s) => (s.note || "").trim());
   const synced = stats.find((s) => s.synced_at)?.synced_at;
   const upcoming = [...(events || [])]
     .filter((e) => e.date >= today()).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 5);
 
+  const cards = [
+    { id: "under", label: "정원 미달 강좌", value: under.length, color: "emerald" },
+    { id: "over", label: "정원 초과 강좌", value: over.length, color: "rose" },
+    { id: "note", label: "강습 특이사항", value: noted.length, color: "amber" },
+  ];
+  const shown = view === "under" ? under : view === "over" ? over : view === "note" ? noted : [];
+
+  // 특이사항 등록용 강좌 검색 (수집된 강좌 우선, 없으면 전체 강좌 목록)
+  const pool = [...new Set([...stats.map((s) => s.course), ...ALL_COURSES.map((c) => c.full)])];
+  const found = pick.trim()
+    ? pool.filter((c) => c.replace(/\s/g, "").includes(pick.replace(/\s/g, ""))).slice(0, 8)
+    : [];
+
+  const addNote = async () => {
+    if (!picked || !newNote.trim()) return;
+    const exists = stats.some((s) => s.course === picked);
+    if (exists) {
+      if (!(await saveNote(picked, newNote.trim()))) return;
+    } else {
+      const { error } = await supabase.from("course_stats")
+        .upsert({ course: picked, note: newNote.trim(), enrolled: 0, capacity: 0 });
+      if (error) { alert("저장 실패: " + error.message); return; }
+      await load();
+    }
+    setAdding(false); setPick(""); setPicked(null); setNewNote("");
+    setView("note");
+  };
+
   return (
     <div className="space-y-5">
-      <div>
-        <h2 className="text-lg font-bold">안녕하세요, {me.id}님</h2>
-        <p className="text-sm text-slate-500">{today()} · {me.dept}</p>
-      </div>
-
-      {/* 요약 */}
-      <div className="grid grid-cols-3 gap-2">
-        <Kpi label="등록 강좌" value={stats.length} />
-        <Kpi label="총 수강 인원" value={stats.reduce((a, s) => a + (s.enrolled || 0), 0)} />
-        <Kpi label="정원 마감" value={full.length} accent={full.length > 0} />
-      </div>
-
-      {/* 수강 인원 현황 */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-        <div className="flex items-center justify-between mb-1 gap-2">
-          <h3 className="font-bold flex items-center gap-1.5"><GraduationCap size={17} className="text-emerald-600" /> 강좌 수강 인원 현황</h3>
-          {isAI && (
-            <button onClick={requestUpdate} disabled={job && job.status !== "done" && job.status !== "error"}
-              className="flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-medium px-3 py-2">
-              {job && (job.status === "pending" || job.status === "working")
-                ? <><Loader2 size={13} className="animate-spin" /> 가져오는 중…</>
-                : <>수강인원 업데이트</>}
-            </button>
-          )}
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <h2 className="text-lg font-bold">안녕하세요, {me.id}님</h2>
+          <p className="text-sm text-slate-500">{today()} · {me.dept}</p>
         </div>
-        <p className="text-[11px] text-slate-400 mb-3">
-          {synced ? `마지막 업데이트 ${synced} · 이후 등록·취소는 자동 반영됩니다` : "아직 업데이트한 적이 없습니다"}
-          {!isAI && " (업데이트는 foreon4 계정에서 가능)"}
-        </p>
-        {job && job.status === "error" && <p className="text-xs text-rose-600 mb-2">실패: {job.result}</p>}
-        {job && job.status === "done" && <p className="text-xs text-emerald-700 mb-2">✔ {job.found}개 강좌 정보를 가져왔습니다.</p>}
-
-        {loading ? <p className="text-sm text-slate-400 py-6 text-center">불러오는 중…</p>
-          : !stats.length ? <p className="text-sm text-slate-400 py-6 text-center">데이터가 없습니다. {isAI ? "‘수강인원 업데이트’를 눌러주세요." : "foreon4 계정에서 업데이트가 필요합니다."}</p>
-            : (
-              <>
-                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="강좌명 검색 (예: 요가, 수영)"
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500 mb-2" />
-                <div className="overflow-x-auto -mx-1">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="text-xs text-slate-500 border-b border-slate-200">
-                        <th className="text-left font-medium py-2 px-1">강좌명</th>
-                        <th className="text-center font-medium py-2 px-1 w-20">인원</th>
-                        <th className="text-left font-medium py-2 px-1 w-28">특이사항</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {list.map((s) => {
-                        const isFull = s.capacity && s.enrolled >= s.capacity;
-                        return (
-                          <tr key={s.course} className="border-b border-slate-50">
-                            <td className="py-2 px-1">
-                              <span className="block leading-tight">{s.course}</span>
-                              {s.floor && <span className="text-[10px] text-slate-400">{s.floor}</span>}
-                            </td>
-                            <td className="text-center px-1">
-                              <span className={`text-xs font-semibold px-2 py-1 rounded-full whitespace-nowrap ${isFull ? "bg-rose-100 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>
-                                {s.enrolled}/{s.capacity}
-                              </span>
-                            </td>
-                            <td className="px-1">
-                              {noteId === s.course ? (
-                                <div className="flex gap-1">
-                                  <input value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} autoFocus
-                                    className="w-full rounded border border-emerald-300 px-1.5 py-1 text-xs outline-none" />
-                                  <button onClick={() => saveNote(s.course)} className="text-emerald-600 text-xs font-medium">저장</button>
-                                </div>
-                              ) : (
-                                <button onClick={() => { setNoteId(s.course); setNoteDraft(s.note || ""); }}
-                                  className="text-xs text-left w-full hover:text-emerald-600">
-                                  {s.note ? <span className="text-amber-700">{s.note}</span> : <span className="text-slate-300">+ 입력</span>}
-                                </button>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-                {!list.length && <p className="text-center text-slate-400 text-sm py-4">검색 결과가 없습니다.</p>}
-              </>
-            )}
+        {isAI && (
+          <button onClick={requestUpdate} disabled={job && (job.status === "pending" || job.status === "working")}
+            className="shrink-0 flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-medium px-3 py-2">
+            {job && (job.status === "pending" || job.status === "working")
+              ? <><Loader2 size={13} className="animate-spin" /> 가져오는 중…</> : "수강인원 업데이트"}
+          </button>
+        )}
       </div>
 
-      {/* 특이사항 모아보기 */}
-      {withNote.length > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5">
-          <h3 className="font-bold text-amber-900 flex items-center gap-1.5 mb-2"><MessageSquareWarning size={16} /> 강좌별 특이사항 ({withNote.length})</h3>
-          <div className="space-y-1.5">
-            {withNote.map((s) => (
-              <div key={s.course} className="bg-white rounded-lg px-3 py-2 border border-amber-100 text-sm">
-                <b className="text-slate-700">{s.course}</b>
-                <p className="text-slate-600 text-xs mt-0.5">{s.note}</p>
-              </div>
-            ))}
+      {job && job.status === "error" && <p className="text-xs text-rose-600 bg-rose-50 rounded-lg p-2">실패: {job.result}</p>}
+      {job && job.status === "done" && <p className="text-xs text-emerald-700 bg-emerald-50 rounded-lg p-2">✔ {job.found}개 강좌를 가져왔습니다.</p>}
+
+      {/* 요약 카드 — 누르면 목록이 펼쳐집니다 */}
+      <div className="grid grid-cols-3 gap-2">
+        {cards.map((c) => {
+          const on = view === c.id;
+          const tone = {
+            emerald: on ? "bg-emerald-600 border-emerald-600 text-white" : "bg-white border-slate-200 hover:border-emerald-300",
+            rose: on ? "bg-rose-600 border-rose-600 text-white" : "bg-white border-slate-200 hover:border-rose-300",
+            amber: on ? "bg-amber-500 border-amber-500 text-white" : "bg-white border-slate-200 hover:border-amber-300",
+          }[c.color];
+          return (
+            <button key={c.id} onClick={() => setView(on ? null : c.id)}
+              className={`rounded-xl border p-3 text-center transition ${tone}`}>
+              <p className={`text-[11px] leading-tight ${on ? "opacity-90" : "text-slate-500"}`}>{c.label}</p>
+              <p className="text-2xl font-bold mt-0.5">{c.value}</p>
+            </button>
+          );
+        })}
+      </div>
+      <p className="text-[11px] text-slate-400 -mt-3">
+        {synced ? `마지막 업데이트 ${synced} · 이후 등록·취소는 자동 반영` : "아직 업데이트한 적이 없습니다"}
+        {!isAI && " (업데이트는 foreon4 계정)"}
+      </p>
+
+      {/* 선택한 카드의 목록 */}
+      {view && (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="font-bold text-sm">{cards.find((c) => c.id === view).label}</h3>
+            <div className="flex items-center gap-2">
+              {view === "note" && (
+                <button onClick={() => setAdding(!adding)} className="flex items-center gap-1 rounded-lg bg-slate-800 text-white text-xs px-2.5 py-1.5">
+                  <Plus size={12} /> 등록
+                </button>
+              )}
+              <button onClick={() => setView(null)} className="text-slate-400"><X size={16} /></button>
+            </div>
           </div>
+
+          {/* 특이사항 등록 — 강좌 검색 후 선택 */}
+          {view === "note" && adding && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-3 space-y-2">
+              <input value={pick} onChange={(e) => { setPick(e.target.value); setPicked(null); }}
+                placeholder="강좌명 검색 (예: 요가 수금, 성인수영 화목)" autoFocus
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-amber-500" />
+              {!picked && found.map((c) => (
+                <button key={c} onClick={() => { setPicked(c); setPick(c); }}
+                  className="block w-full text-left text-sm bg-white border border-slate-200 rounded-lg px-3 py-2 hover:border-amber-400">{c}</button>
+              ))}
+              {!picked && pick.trim() && !found.length && <p className="text-xs text-slate-400">검색 결과가 없습니다.</p>}
+              {picked && (
+                <>
+                  <p className="text-xs text-amber-800">선택: <b>{picked}</b></p>
+                  <textarea rows={2} value={newNote} onChange={(e) => setNewNote(e.target.value)}
+                    placeholder="특이사항 내용" className="w-full rounded-lg border border-slate-200 p-2.5 text-sm outline-none focus:border-amber-500 resize-none" />
+                  <div className="flex gap-2">
+                    <button onClick={addNote} className="flex-1 rounded-lg bg-amber-500 text-white text-xs font-medium py-2">등록</button>
+                    <button onClick={() => { setAdding(false); setPick(""); setPicked(null); setNewNote(""); }}
+                      className="flex-1 rounded-lg border border-slate-200 text-slate-500 text-xs py-2">취소</button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {loading ? <p className="text-sm text-slate-400 py-6 text-center">불러오는 중…</p>
+            : !shown.length ? <p className="text-sm text-slate-400 py-6 text-center">해당하는 강좌가 없습니다.</p>
+              : (
+                <div className="space-y-1.5 max-h-[26rem] overflow-y-auto">
+                  {shown.map((s) => (
+                    <div key={s.course} className="border border-slate-100 rounded-lg px-3 py-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="text-sm leading-tight">{s.course}</span>
+                        {s.capacity > 0 && (
+                          <span className={`shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full ${s.enrolled >= s.capacity ? "bg-rose-100 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>
+                            {s.enrolled}/{s.capacity}
+                          </span>
+                        )}
+                      </div>
+                      {noteId === s.course ? (
+                        <div className="flex gap-1 mt-1.5">
+                          <input value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} autoFocus
+                            className="flex-1 rounded border border-amber-300 px-2 py-1 text-xs outline-none" />
+                          <button onClick={async () => { if (await saveNote(s.course, noteDraft)) setNoteId(null); }}
+                            className="text-emerald-600 text-xs font-medium px-1">저장</button>
+                          <button onClick={() => setNoteId(null)} className="text-slate-400 text-xs px-1">취소</button>
+                        </div>
+                      ) : (
+                        <button onClick={() => { setNoteId(s.course); setNoteDraft(s.note || ""); }}
+                          className="mt-1 text-xs text-left w-full">
+                          {s.note ? <span className="text-amber-700">📌 {s.note}</span> : <span className="text-slate-300">+ 특이사항 입력</span>}
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
         </div>
       )}
 
@@ -1068,14 +1111,6 @@ function Home({ me, events }) {
     </div>
   );
 }
-function Kpi({ label, value, accent }) {
-  return (
-    <div className={`rounded-xl border p-3 text-center ${accent ? "bg-rose-50 border-rose-200" : "bg-white border-slate-200"}`}>
-      <p className="text-[11px] text-slate-500">{label}</p>
-      <p className={`text-xl font-bold ${accent ? "text-rose-600" : "text-slate-800"}`}>{value}</p>
-    </div>
-  );
-}
 
 /* 일일업무일지 자동입력 — 커뮤니티이력(A) 내용을 업무일지(B)에 채워 넣기 */
 const fileToB64 = (file) => new Promise((res, rej) => {
@@ -1085,7 +1120,7 @@ const fileToB64 = (file) => new Promise((res, rej) => {
   r.readAsDataURL(file);
 });
 
-function DailyExcel({ me }) {
+function DailyExcel({ me, notes, setNotes }) {
   const [a, setA] = useState(null);
   const [b, setB] = useState(null);
   const [day, setDay] = useState(today());
@@ -1109,6 +1144,7 @@ function DailyExcel({ me }) {
       const [fa, fb] = await Promise.all([fileToB64(a), fileToB64(b)]);
       const { data, error } = await supabase.from("excel_jobs").insert({
         day, name_a: a.name, name_b: b.name, file_a: fa, file_b: fb,
+        notes: notes || "",
         status: "pending", by: me.id, at: stamp(),
       }).select().maybeSingle();
       if (error) throw new Error(error.message);
@@ -1157,6 +1193,15 @@ function DailyExcel({ me }) {
             <input type="date" value={day} onChange={(e) => setDay(e.target.value)}
               className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-emerald-500" />
           </label>
+          <div>
+            <span className="text-xs font-medium text-slate-500 block mb-1">④ 업무내용 (엑셀 B77~B87 칸에 그대로 입력)</span>
+            <textarea rows={5} value={notes} onChange={(e) => setNotes(e.target.value)}
+              placeholder={"- 업무내용1\n- 업무내용2\n- 업무내용3"}
+              className="w-full rounded-lg border border-slate-200 p-2.5 text-sm outline-none focus:border-emerald-500 resize-none font-mono" />
+            <p className="text-[11px] text-slate-400 mt-1">
+              한 줄이 한 칸입니다 · 현재 {notes.split("\n").filter((l) => l.trim()).length}줄 (최대 11줄)
+            </p>
+          </div>
           <button onClick={run} disabled={busy || running}
             className="w-full rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-sm font-medium py-2.5 flex items-center justify-center gap-1.5">
             {busy || running ? <><Loader2 size={15} className="animate-spin" /> 처리 중… (PC 작업자 실행)</> : <><PlayCircle size={15} /> 자동 입력 실행</>}
@@ -1205,7 +1250,7 @@ function OfficeLog({ me }) {
         <h2 className="text-base font-bold">사무실 업무일지 <span className="text-slate-400 font-normal text-sm">({rows.length})</span></h2>
       </div>
 
-      <DailyExcel me={me} />
+      <DailyExcel me={me} notes={text} setNotes={setText} />
       <div className="bg-white rounded-xl border border-slate-200 p-4 mb-4">
         <div className="flex items-center gap-2 mb-2">
           <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
