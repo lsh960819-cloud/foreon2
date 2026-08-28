@@ -227,6 +227,19 @@ function capacityOf(course = "") {
 const isUnder = (s) => s.enrolled < Math.ceil(capacityOf(s.course) * UNDER_RATIO);
 const isOver = (s) => s.enrolled >= capacityOf(s.course);
 
+/* 확인창이 차단된 환경(회사 PC 등)에서도 동작하도록 —
+   대화상자가 뜨지 않고 즉시 false 가 오면 차단으로 보고 진행합니다. */
+function askYesNo(msg) {
+  try {
+    const t0 = Date.now();
+    const ok = window.confirm(msg);
+    if (ok) return true;
+    return Date.now() - t0 < 10;   // 사람이 누른 게 아니라 즉시 반환 → 차단된 것
+  } catch (e) {
+    return true;
+  }
+}
+
 const today = () => new Date().toISOString().slice(0, 10);
 const nowLocal = () => {
   const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
@@ -764,7 +777,7 @@ function Lost({ me, rows, setRows }) {
     setRows(rows.map((r) => r.id === id ? { ...r, item: editV.item, place: editV.place } : r));
     setEditId(null);
   };
-  const del = (id) => { if (window.confirm("이 분실물 기록을 삭제할까요?")) setRows(rows.filter((r) => r.id !== id)); };
+  const del = (id) => { if (askYesNo("이 분실물 기록을 삭제할까요?")) setRows(rows.filter((r) => r.id !== id)); };
 
   return (
     <div>
@@ -840,7 +853,7 @@ function Events({ me, rows, setRows }) {
     setRows(rows.map((r) => r.id === id ? { ...r, ...editV } : r));
     setEditId(null);
   };
-  const del = (id) => { if (window.confirm("이 행사·일정을 삭제할까요?")) setRows(rows.filter((r) => r.id !== id)); };
+  const del = (id) => { if (askYesNo("이 행사·일정을 삭제할까요?")) setRows(rows.filter((r) => r.id !== id)); };
 
   return (
     <div>
@@ -1180,7 +1193,7 @@ function DailyExcel({ me }) {
 
   const run = async () => {
     if (!a || !b) { alert("커뮤니티이력(A)과 업무일지(B) 파일을 모두 선택해주세요."); return; }
-    if (dirty && !window.confirm("저장하지 않은 업무내용이 있습니다. 지금 화면의 내용으로 진행할까요?")) return;
+    if (dirty && !askYesNo("저장하지 않은 업무내용이 있습니다. 지금 화면의 내용으로 진행할까요?")) return;
     setBusy(true);
     try {
       const [fa, fb] = await Promise.all([fileToB64(a), fileToB64(b)]);
@@ -1331,19 +1344,24 @@ function TransferForm({ me }) {
   const [job, setJob] = useState(null);
   const [err, setErr] = useState("");
   const [counts, setCounts] = useState({});
+  const [confirming, setConfirming] = useState(false);
 
   // 강좌별 현재 수강 인원 (홈 화면과 같은 자료)
+  const [statsLoaded, setStatsLoaded] = useState(false);
+  const keyOf = (t) => String(t).replace(/[\s\-()/·.,]/g, "");
   React.useEffect(() => {
     let alive = true;
-    supabase.from("course_stats").select("course,enrolled").then(({ data }) => {
+    supabase.from("course_stats").select("course,enrolled").then(({ data, error }) => {
       if (!alive) return;
       const map = {};
-      for (const r of data || []) map[String(r.course).replace(/\s/g, "")] = r.enrolled;
+      for (const r of data || []) map[keyOf(r.course)] = r.enrolled;
       setCounts(map);
+      setStatsLoaded(true);
+      if (error) console.error("course_stats", error.message);
     });
     return () => { alive = false; };
   }, []);
-  const countOf = (full) => counts[String(full).replace(/\s/g, "")];
+  const countOf = (full) => counts[keyOf(full)];
 
   const isSwim = group === "수영" || group === "아쿠아";
   const flat = (t) => String(t).replace(/[\s\-()/·.,]/g, "");
@@ -1372,15 +1390,17 @@ function TransferForm({ me }) {
   const toggle = (full) =>
     setExcludes((x) => x.includes(full) ? x.filter((v) => v !== full) : [...x, full]);
 
-  const run = async () => {
+  const ask = () => {
     setErr("");
     if (!group) { setErr("강좌 그룹을 먼저 선택해주세요."); return; }
     if (!willRun.length) { setErr("이월할 강좌가 없습니다."); return; }
     if (fromYm === toYm) { setErr("가져올 달과 넣을 달이 같습니다."); return; }
-    if (!window.confirm(`${willRun.length}개 강좌를 ${fromYm} → ${toYm} 로 이월합니다. 진행할까요?`)) {
-      setErr("취소했습니다.");
-      return;
-    }
+    setConfirming(true);
+  };
+
+  const run = async () => {
+    setErr("");
+    setConfirming(false);
     setSaving(true);
     try {
       let b64 = null;
@@ -1495,6 +1515,9 @@ function TransferForm({ me }) {
             </div>
           ) : <p className="text-xs text-slate-400">해당하는 강좌가 없습니다.</p>}
           <p className="text-[11px] text-slate-400 mt-1.5">수강생이 0명인 강좌는 자동으로 건너뜁니다. 반변경자는 기존 반에서 <b>제외만</b> 되며, 새 반 등록은 직접 해주세요.</p>
+          {statsLoaded && Object.keys(counts).length === 0 && (
+            <p className="text-[11px] text-amber-600 mt-1">인원 숫자를 보려면 <b>홈</b> 화면에서 [수강인원 업데이트] 를 먼저 눌러주세요.</p>
+          )}
         </div>
       )}
 
@@ -1504,10 +1527,26 @@ function TransferForm({ me }) {
         안전모드 (강좌마다 [예약 생성] 은 PC에서 직접 클릭)
       </label>
 
-      <button onClick={run} disabled={saving || running || !willRun.length}
-        className="w-full rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white text-sm font-medium py-2.5 flex items-center justify-center gap-1.5">
-        {saving || running ? <><Loader2 size={15} className="animate-spin" /> 이월 진행 중…</> : <><PlayCircle size={15} /> 이월 실행 ({willRun.length}개)</>}
-      </button>
+      {confirming ? (
+        <div className="bg-emerald-50 border border-emerald-300 rounded-xl p-3 space-y-2">
+          <p className="text-sm text-emerald-900">
+            <b>{willRun.length}개</b> 강좌를 <b>{fromYm} → {toYm}</b> 로 이월합니다. 진행할까요?
+          </p>
+          <div className="flex gap-2">
+            <button onClick={run} className="flex-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium py-2">
+              네, 진행합니다
+            </button>
+            <button onClick={() => setConfirming(false)} className="flex-1 rounded-lg border border-slate-300 text-slate-600 text-sm py-2">
+              취소
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button onClick={ask} disabled={saving || running || !willRun.length}
+          className="w-full rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white text-sm font-medium py-2.5 flex items-center justify-center gap-1.5">
+          {saving || running ? <><Loader2 size={15} className="animate-spin" /> 이월 진행 중…</> : <><PlayCircle size={15} /> 이월 실행 ({willRun.length}개)</>}
+        </button>
+      )}
 
       {err && (
         <p className={`text-xs rounded-lg p-2.5 border ${err.startsWith("참고") ? "bg-amber-50 text-amber-800 border-amber-200" : "bg-rose-50 text-rose-700 border-rose-200"}`}>
@@ -1849,7 +1888,7 @@ function WorkLogs({ me }) {
   };
 
   const del = async (id) => {
-    if (!window.confirm("이 작업 기록을 삭제할까요?")) return;
+    if (!askYesNo("이 작업 기록을 삭제할까요?")) return;
     const { error } = await supabase.from("work_logs").delete().eq("id", id);
     if (error) { alert("삭제 실패: " + error.message); return; }
     setRows(rows.filter((r) => r.id !== id));
