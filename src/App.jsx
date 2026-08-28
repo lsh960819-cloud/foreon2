@@ -1347,20 +1347,20 @@ function TransferForm({ me }) {
   const [confirming, setConfirming] = useState(false);
 
   // 강좌별 현재 수강 인원 (홈 화면과 같은 자료)
-  const [statsLoaded, setStatsLoaded] = useState(false);
+  const [statsMsg, setStatsMsg] = useState("인원 불러오는 중…");
   const keyOf = (t) => String(t).replace(/[\s\-()/·.,]/g, "");
-  React.useEffect(() => {
-    let alive = true;
-    supabase.from("course_stats").select("course,enrolled").then(({ data, error }) => {
-      if (!alive) return;
-      const map = {};
-      for (const r of data || []) map[keyOf(r.course)] = r.enrolled;
-      setCounts(map);
-      setStatsLoaded(true);
-      if (error) console.error("course_stats", error.message);
-    });
-    return () => { alive = false; };
+  const loadCounts = React.useCallback(async () => {
+    setStatsMsg("인원 불러오는 중…");
+    const { data, error } = await supabase.from("course_stats").select("course,enrolled");
+    if (error) { setStatsMsg("인원을 불러오지 못했습니다: " + error.message); return; }
+    const map = {};
+    for (const r of data || []) map[keyOf(r.course)] = r.enrolled;
+    setCounts(map);
+    setStatsMsg(Object.keys(map).length
+      ? ""
+      : "인원 숫자가 없습니다 — 홈 화면에서 [수강인원 업데이트] 를 먼저 눌러주세요.");
   }, []);
+  React.useEffect(() => { loadCounts(); }, [loadCounts]);
   const countOf = (full) => counts[keyOf(full)];
 
   const isSwim = group === "수영" || group === "아쿠아";
@@ -1486,13 +1486,21 @@ function TransferForm({ me }) {
             <span className="text-xs font-medium text-slate-500">
               대상 강좌 {willRun.length}개 {excludes.length > 0 && <span className="text-rose-500">(제외 {excludes.length}개)</span>}
             </span>
-            {targets.length > 0 && (
-              <button type="button" onClick={() => setExcludes(excludes.length ? [] : targets.map((c) => c.full))}
-                className="text-[11px] text-slate-500 underline">
-                {excludes.length ? "제외 해제" : "전체 제외"}
-              </button>
-            )}
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={loadCounts} className="text-[11px] text-slate-500 underline">인원 새로고침</button>
+              {targets.length > 0 && (
+                <button type="button" onClick={() => setExcludes(excludes.length ? [] : targets.map((c) => c.full))}
+                  className="text-[11px] text-slate-500 underline">
+                  {excludes.length ? "제외 해제" : "전체 제외"}
+                </button>
+              )}
+            </div>
           </div>
+          {statsMsg && (
+            <p className={`text-[11px] mb-1.5 rounded p-2 ${statsMsg.startsWith("인원 불러오는") ? "text-slate-400" : "bg-amber-50 text-amber-700 border border-amber-200"}`}>
+              {statsMsg}
+            </p>
+          )}
           {targets.length ? (
             <div className="border border-slate-200 rounded-lg divide-y divide-slate-100 max-h-64 overflow-y-auto">
               {targets.map((c) => {
@@ -1515,9 +1523,7 @@ function TransferForm({ me }) {
             </div>
           ) : <p className="text-xs text-slate-400">해당하는 강좌가 없습니다.</p>}
           <p className="text-[11px] text-slate-400 mt-1.5">수강생이 0명인 강좌는 자동으로 건너뜁니다. 반변경자는 기존 반에서 <b>제외만</b> 되며, 새 반 등록은 직접 해주세요.</p>
-          {statsLoaded && Object.keys(counts).length === 0 && (
-            <p className="text-[11px] text-amber-600 mt-1">인원 숫자를 보려면 <b>홈</b> 화면에서 [수강인원 업데이트] 를 먼저 눌러주세요.</p>
-          )}
+
         </div>
       )}
 
