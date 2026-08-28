@@ -1329,6 +1329,21 @@ function TransferForm({ me }) {
   const [safe, setSafe] = useState(true);
   const [saving, setSaving] = useState(false);
   const [job, setJob] = useState(null);
+  const [err, setErr] = useState("");
+  const [counts, setCounts] = useState({});
+
+  // 강좌별 현재 수강 인원 (홈 화면과 같은 자료)
+  React.useEffect(() => {
+    let alive = true;
+    supabase.from("course_stats").select("course,enrolled").then(({ data }) => {
+      if (!alive) return;
+      const map = {};
+      for (const r of data || []) map[String(r.course).replace(/\s/g, "")] = r.enrolled;
+      setCounts(map);
+    });
+    return () => { alive = false; };
+  }, []);
+  const countOf = (full) => counts[String(full).replace(/\s/g, "")];
 
   const isSwim = group === "수영" || group === "아쿠아";
   const flat = (t) => String(t).replace(/[\s\-()/·.,]/g, "");
@@ -1341,33 +1356,64 @@ function TransferForm({ me }) {
   React.useEffect(() => {
     if (!job || job.status === "done" || job.status === "error") return;
     const t = setInterval(async () => {
-      const { data } = await supabase.from("transfer_jobs").select("*").eq("id", job.id).maybeSingle();
-      if (data) setJob(data);
+      if (job.id) {
+        const { data } = await supabase.from("transfer_jobs").select("*").eq("id", job.id).maybeSingle();
+        if (data) setJob(data);
+      } else {
+        // id 를 못 받은 경우: 내가 보낸 가장 최근 요청을 따라간다
+        const { data } = await supabase.from("transfer_jobs")
+          .select("*").eq("by", me.id).order("id", { ascending: false }).limit(1);
+        if (data && data[0]) setJob(data[0]);
+      }
     }, 3000);
     return () => clearInterval(t);
-  }, [job]);
+  }, [job, me.id]);
 
   const toggle = (full) =>
     setExcludes((x) => x.includes(full) ? x.filter((v) => v !== full) : [...x, full]);
 
   const run = async () => {
-    if (!group) { alert("강좌 그룹을 선택해주세요."); return; }
-    if (!willRun.length) { alert("이월할 강좌가 없습니다."); return; }
-    if (fromYm === toYm) { alert("가져올 달과 넣을 달이 같습니다."); return; }
-    if (!window.confirm(`${willRun.length}개 강좌를 ${fromYm} → ${toYm} 로 이월합니다. 진행할까요?`)) return;
+    setErr("");
+    if (!group) { setErr("강좌 그룹을 먼저 선택해주세요."); return; }
+    if (!willRun.length) { setErr("이월할 강좌가 없습니다."); return; }
+    if (fromYm === toYm) { setErr("가져올 달과 넣을 달이 같습니다."); return; }
+    if (!window.confirm(`${willRun.length}개 강좌를 ${fromYm} → ${toYm} 로 이월합니다. 진행할까요?`)) {
+      setErr("취소했습니다.");
+      return;
+    }
     setSaving(true);
     try {
       let b64 = null;
       if (file) b64 = await fileToB64(file);
-      const { data, error } = await supabase.from("transfer_jobs").insert({
+      const base = {
         group_key: group, from_ym: fromYm, to_ym: toYm,
-        targets: willRun.map((c) => c.full),
         excludes, change_file: b64, change_name: file?.name || null,
         safe, status: "pending", by: me.id, at: stamp(),
-      }).select().maybeSingle();
+      };
+      const targets = willRun.map((c) => c.full);
+      let { data, error } = await supabase.from("transfer_jobs")
+        .insert({ ...base, targets }).select().maybeSingle();
+
+      // targets 칸이 아직 없는 계정이면 그 칸만 빼고 다시 저장
+      if (error && /targets/i.test(error.message || "")) {
+        ({ data, error } = await supabase.from("transfer_jobs")
+          .insert(base).select().maybeSingle());
+        if (!error) setErr("참고: 대상 강좌 저장 칸이 없어 PC가 직접 검색합니다 (7차 SQL 실행 권장).");
+      }
       if (error) throw new Error(error.message);
-      setJob(data);
-    } catch (e) { alert("요청 실패: " + e.message); }
+
+      // 저장은 됐는데 응답이 비는 경우(읽기 권한 등) → 방금 넣은 요청을 다시 찾아본다
+      if (!data) {
+        const { data: found } = await supabase.from("transfer_jobs")
+          .select("*").eq("by", me.id).eq("at", base.at)
+          .order("id", { ascending: false }).limit(1);
+        data = (found && found[0]) || null;
+      }
+      if (data) setJob(data);
+      else setJob({ id: null, status: "working", progress: "요청 전송됨 — PC 작업자가 처리 중입니다" });
+    } catch (e) {
+      setErr("요청 실패: " + (e.message || String(e)));
+    }
     setSaving(false);
   };
 
@@ -1437,7 +1483,12 @@ function TransferForm({ me }) {
                     <span className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${off ? "border-slate-300" : "bg-emerald-600 border-emerald-600"}`}>
                       {!off && <CheckCircle2 size={12} className="text-white" />}
                     </span>
-                    {c.full}
+                    <span className="flex-1">{c.full}</span>
+                    {countOf(c.full) !== undefined && (
+                      <span className={`shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full ${off ? "bg-slate-100 text-slate-400" : countOf(c.full) === 0 ? "bg-slate-100 text-slate-500" : "bg-emerald-50 text-emerald-700"}`}>
+                        {countOf(c.full)}/{capacityOf(c.full)}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -1457,6 +1508,12 @@ function TransferForm({ me }) {
         className="w-full rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white text-sm font-medium py-2.5 flex items-center justify-center gap-1.5">
         {saving || running ? <><Loader2 size={15} className="animate-spin" /> 이월 진행 중…</> : <><PlayCircle size={15} /> 이월 실행 ({willRun.length}개)</>}
       </button>
+
+      {err && (
+        <p className={`text-xs rounded-lg p-2.5 border ${err.startsWith("참고") ? "bg-amber-50 text-amber-800 border-amber-200" : "bg-rose-50 text-rose-700 border-rose-200"}`}>
+          {err}
+        </p>
+      )}
 
       {job && (
         <div className={`rounded-lg p-3 text-sm ${job.status === "error" ? "bg-rose-50 border border-rose-200 text-rose-700" : "bg-slate-50 border border-slate-200"}`}>
