@@ -1383,9 +1383,13 @@ function TransferForm({ me }) {
           .select("*").eq("by", me.id).order("id", { ascending: false }).limit(1);
         if (data && data[0]) setJob(data[0]);
       }
-    }, 3000);
+    }, 1500);
     return () => clearInterval(t);
   }, [job, me.id]);
+
+  /* PC 작업자가 사람 손을 기다리는 중이면 progress 가 '⏸' 로 시작한다 */
+  const waitText = job && typeof job.progress === "string" && job.progress.startsWith("⏸")
+    ? job.progress.slice(1).trim() : "";
 
   const toggle = (full) =>
     setExcludes((x) => x.includes(full) ? x.filter((v) => v !== full) : [...x, full]);
@@ -1532,6 +1536,11 @@ function TransferForm({ me }) {
           className="w-4 h-4 rounded border-slate-300 accent-emerald-600" />
         안전모드 (강좌마다 [예약 생성] 은 PC에서 직접 클릭)
       </label>
+      <p className="text-[11px] text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-2 -mt-1">
+        <b>'강좌 월 선택' 창의 월 선택과 [확인] 은 항상 PC에서 직접</b> 눌러주세요.
+        그 외 강좌 검색 · 명단 전체 선택 · 반변경자 제외는 자동으로 진행됩니다.
+        차례가 되면 이 화면에 알려드립니다.
+      </p>
 
       {confirming ? (
         <div className="bg-emerald-50 border border-emerald-300 rounded-xl p-3 space-y-2">
@@ -1560,9 +1569,17 @@ function TransferForm({ me }) {
         </p>
       )}
 
+      {waitText && (
+        <div className="rounded-xl border-2 border-amber-400 bg-amber-50 p-3 animate-pulse">
+          <p className="text-xs font-bold text-amber-900 mb-0.5">⏸ 지금 PC 브라우저에서 직접 눌러주세요</p>
+          <p className="text-sm text-amber-900">{waitText}</p>
+          <p className="text-[11px] text-amber-700 mt-1">누르시면 나머지는 자동으로 이어집니다.</p>
+        </div>
+      )}
+
       {job && (
         <div className={`rounded-lg p-3 text-sm ${job.status === "error" ? "bg-rose-50 border border-rose-200 text-rose-700" : "bg-slate-50 border border-slate-200"}`}>
-          {job.progress && <p className="font-medium">{job.progress}</p>}
+          {job.progress && !waitText && <p className="font-medium">{job.progress}</p>}
           {job.result && <p className="text-xs mt-1 whitespace-pre-wrap">{job.result}</p>}
           {Array.isArray(job.detail) && job.detail.length > 0 && (
             <details className="mt-2">
