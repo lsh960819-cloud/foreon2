@@ -1922,7 +1922,8 @@ function ReservationForm({ me, kind, options, seatLabel, seatPh }) {
     const amt = amount.trim() || (auto != null ? String(auto) : "");
     const productKey = kind === "독서실" ? `${optLabel}독서실` : `골프백(${optLabel})`;
     // 독서실은 남자석/여자석이 나뉘어 있어 성별을 함께 보냅니다 (예: "남자 13")
-    const seatSend = kind === "독서실" && seat.trim() ? `${gender} ${seat.trim()}` : seat;
+    const seatSend = (kind === "독서실" && optLabel === "일반" && seat.trim())
+      ? `${gender} ${seat.trim()}` : seat;
     setSaving(true);
     const at = nowLocal().replace("T", " ");
     // 기록 저장
@@ -1979,7 +1980,7 @@ function ReservationForm({ me, kind, options, seatLabel, seatPh }) {
           <Fld label={action === "등록" ? "등록일" : "해지일"}>
             <input type="date" value={dateStr} onChange={(e) => setDateStr(e.target.value)} className="rin" />
           </Fld>
-          {kind === "독서실" && (
+          {kind === "독서실" && optLabel === "일반" && (
             <Fld label="남자석 / 여자석 *">
               <div className="flex gap-1.5">
                 {["남자", "여자"].map((g) => (
