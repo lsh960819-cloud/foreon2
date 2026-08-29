@@ -2,7 +2,8 @@ import React, { useState, useMemo } from "react";
 import {
   LogIn, LogOut, Search, PackageSearch, ClipboardList, CalendarDays, Home as HomeIcon,
   Plus, X, User, Loader2, MessageSquareWarning, ArrowLeftRight, Inbox, Send, Upload,
-  CheckCircle2, Clock, FileText, GraduationCap, PlayCircle, Pencil, Trash2, Copy
+  CheckCircle2, Clock, FileText, GraduationCap, PlayCircle, Pencil, Trash2, Copy,
+  FolderOpen, Download, RefreshCw
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { supabase } from "./supabaseClient.js";
@@ -366,6 +367,7 @@ export default function App() {
     { id: "events", label: "주요 행사·일정", icon: CalendarDays },
     { id: "lessons", label: "등록·취소·이월", icon: GraduationCap },
     { id: "worklogs", label: "작업 기록", icon: FileText },
+    { id: "files", label: "자료실", icon: FolderOpen },
     ...(isOffice ? [{ id: "officelog", label: "사무실 업무일지", icon: ClipboardList }] : []),
     { id: "link", label: "외부 연동", icon: ArrowLeftRight },
   ];
@@ -407,6 +409,7 @@ export default function App() {
         {tab === "events" && <Events me={me} rows={events} setRows={setEvents} />}
         {tab === "lessons" && <Registrations me={me} />}
         {tab === "worklogs" && <WorkLogs me={me} />}
+        {tab === "files" && <SharedFiles me={me} />}
         {tab === "officelog" && isOffice && <OfficeLog me={me} />}
         {tab === "link" && <LinkInfo />}
       </div>
@@ -1327,6 +1330,160 @@ function Registrations({ me }) {
   );
 }
 
+
+/* ─────────────────────── 자료실 (공유 폴더)
+   Supabase Storage 의 'shared' 버킷을 씁니다.
+   파일 이름에 올린 사람과 시각을 함께 담아, 표 하나 더 만들지 않고도
+   누가 언제 올렸는지 보이도록 했습니다.                                */
+const FILE_BUCKET = "shared";
+const FILE_FOLDERS = ["공지·안내", "서식·양식", "사진", "기타"];
+
+const encName = (folder, uploader, name) =>
+  `${folder}/${Date.now()}__${uploader}__${name.replace(/[/\\]/g, "_")}`;
+
+function decName(path) {
+  const base = String(path).split("/").pop();
+  const m = base.match(/^(\d+)__([^_]+)__(.+)$/);
+  if (!m) return { name: base, by: "", at: "" };
+  const d = new Date(Number(m[1]));
+  const two = (n) => String(n).padStart(2, "0");
+  return {
+    name: m[3], by: m[2],
+    at: `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`,
+  };
+}
+
+const sizeText = (b) => {
+  if (!b && b !== 0) return "";
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${Math.round(b / 1024)} KB`;
+  return `${(b / 1024 / 1024).toFixed(1)} MB`;
+};
+
+function SharedFiles({ me }) {
+  const [folder, setFolder] = useState(FILE_FOLDERS[0]);
+  const [rows, setRows] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+  const inputRef = React.useRef(null);
+
+  const load = React.useCallback(async (f) => {
+    setBusy(true); setErr("");
+    const { data, error } = await supabase.storage.from(FILE_BUCKET)
+      .list(f, { limit: 200, sortBy: { column: "name", order: "desc" } });
+    setBusy(false);
+    if (error) {
+      setErr(error.message.includes("not found")
+        ? `저장 공간(${FILE_BUCKET})이 아직 없습니다. Supabase → Storage 에서 '${FILE_BUCKET}' 버킷을 만들어주세요.`
+        : "목록을 불러오지 못했습니다: " + error.message);
+      setRows([]); return;
+    }
+    setRows((data || []).filter((r) => r.name && !r.name.startsWith(".")));
+  }, []);
+
+  React.useEffect(() => { load(folder); }, [folder, load]);
+
+  const upload = async (fileList) => {
+    const files = [...(fileList || [])];
+    if (!files.length) return;
+    setBusy(true); setErr(""); setMsg("");
+    let ok = 0;
+    for (const f of files) {
+      if (f.size > 50 * 1024 * 1024) { setErr(`${f.name} 은 50MB 를 넘어 올리지 못했습니다.`); continue; }
+      const { error } = await supabase.storage.from(FILE_BUCKET)
+        .upload(encName(folder, me.id, f.name), f, { upsert: false });
+      if (error) setErr(`${f.name} 올리기 실패: ${error.message}`); else ok++;
+    }
+    setBusy(false);
+    if (ok) setMsg(`${ok}개 파일을 올렸습니다.`);
+    if (inputRef.current) inputRef.current.value = "";
+    load(folder);
+  };
+
+  const open = async (row) => {
+    const { data, error } = await supabase.storage.from(FILE_BUCKET)
+      .createSignedUrl(`${folder}/${row.name}`, 60 * 10);
+    if (error || !data) { setErr("내려받기 실패: " + (error?.message || "")); return; }
+    window.open(data.signedUrl, "_blank");
+  };
+
+  const remove = async (row) => {
+    const info = decName(row.name);
+    if (!window.confirm(`'${info.name}' 을 지울까요?`)) return;
+    setBusy(true);
+    const { error } = await supabase.storage.from(FILE_BUCKET).remove([`${folder}/${row.name}`]);
+    setBusy(false);
+    if (error) setErr("삭제 실패: " + error.message); else load(folder);
+  };
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="font-bold">자료실</h2>
+        <button onClick={() => load(folder)} className="text-xs text-slate-500 flex items-center gap-1">
+          <RefreshCw size={13} /> 새로고침
+        </button>
+      </div>
+
+      <div className="flex flex-wrap gap-1.5">
+        {FILE_FOLDERS.map((f) => (
+          <button key={f} type="button" onClick={() => setFolder(f)}
+            className={`text-sm px-3 py-1.5 rounded-full border transition ${folder === f ? "bg-emerald-600 border-emerald-600 text-white font-medium" : "bg-white border-slate-200 text-slate-600 hover:border-emerald-300"}`}>
+            {f}
+          </button>
+        ))}
+      </div>
+
+      <label className="block border-2 border-dashed border-slate-200 rounded-xl p-4 text-center cursor-pointer hover:border-emerald-300"
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => { e.preventDefault(); upload(e.dataTransfer.files); }}>
+        <input ref={inputRef} type="file" multiple className="hidden"
+          onChange={(e) => upload(e.target.files)} />
+        <Upload size={18} className="mx-auto text-slate-400 mb-1" />
+        <p className="text-sm text-slate-600">파일을 끌어다 놓거나 눌러서 올리기</p>
+        <p className="text-[11px] text-slate-400 mt-0.5">여러 개 한꺼번에 가능 · 한 개당 50MB 까지</p>
+      </label>
+
+      {msg && <p className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg p-2">{msg}</p>}
+      {err && <p className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg p-2">{err}</p>}
+
+      {busy && <p className="text-xs text-slate-400 flex items-center gap-1"><Loader2 size={13} className="animate-spin" /> 처리 중…</p>}
+
+      {rows.length ? (
+        <div className="border border-slate-200 rounded-lg divide-y divide-slate-100">
+          {rows.map((r) => {
+            const info = decName(r.name);
+            const mine = info.by === me.id || me.dept === "사무실";
+            return (
+              <div key={r.name} className="flex items-center gap-2 px-3 py-2.5">
+                <FileText size={15} className="text-slate-400 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm truncate">{info.name}</p>
+                  <p className="text-[11px] text-slate-400">
+                    {info.by && `${info.by} · `}{info.at}
+                    {r.metadata?.size ? ` · ${sizeText(r.metadata.size)}` : ""}
+                  </p>
+                </div>
+                <button onClick={() => open(r)} title="내려받기"
+                  className="text-slate-400 hover:text-emerald-600 p-1.5"><Download size={15} /></button>
+                {mine && (
+                  <button onClick={() => remove(r)} title="삭제"
+                    className="text-slate-300 hover:text-rose-600 p-1.5"><Trash2 size={15} /></button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : (!busy && !err && <p className="text-xs text-slate-400">아직 올린 파일이 없습니다.</p>)}
+
+      <p className="text-[11px] text-slate-400">
+        올린 사람 본인과 사무실 계정만 삭제할 수 있습니다. 개인정보가 담긴 파일은 올리지 말아주세요.
+      </p>
+    </div>
+  );
+}
+
 /* ─────────────────────── 이월 (지난달 수강생 → 다음달 창구) */
 const TRANSFER_GROUPS = [
   "2단지 요가", "2단지 줌바", "2단지 타바타", "2단지 방송댄스", "2단지 근력",
@@ -1348,15 +1505,18 @@ function TransferForm({ me }) {
 
   // 강좌별 현재 수강 인원 (홈 화면과 같은 자료)
   const [statsMsg, setStatsMsg] = useState("인원 불러오는 중…");
-  const keyOf = (t) => String(t).replace(/[\s\-()/·.,]/g, "");
+  const [stats, setStats] = useState([]);
+  const keyOf = (t) => String(t).replace(/[^0-9A-Za-z가-힣]/g, "");
   const loadCounts = React.useCallback(async () => {
     setStatsMsg("인원 불러오는 중…");
-    const { data, error } = await supabase.from("course_stats").select("course,enrolled");
+    const { data, error } = await supabase.from("course_stats").select("course,enrolled,capacity");
     if (error) { setStatsMsg("인원을 불러오지 못했습니다: " + error.message); return; }
+    const list = data || [];
     const map = {};
-    for (const r of data || []) map[keyOf(r.course)] = r.enrolled;
+    for (const r of list) map[keyOf(r.course)] = r.enrolled;
+    setStats(list);
     setCounts(map);
-    setStatsMsg(Object.keys(map).length
+    setStatsMsg(list.length
       ? ""
       : "인원 숫자가 없습니다 — 홈 화면에서 [수강인원 업데이트] 를 먼저 눌러주세요.");
   }, []);
@@ -1366,9 +1526,21 @@ function TransferForm({ me }) {
   const isSwim = group === "수영" || group === "아쿠아";
   const flat = (t) => String(t).replace(/[\s\-()/·.,]/g, "");
   const words = group.trim().split(/\s+/).map(flat).filter(Boolean);
-  const targets = words.length
-    ? ALL_COURSES.filter((c) => words.every((w) => flat(c.full).includes(w)))
+
+  /* 대상 강좌는 '수강인원 업데이트' 로 가져온 실제 강좌(course_stats) 를 먼저 쓴다.
+     → 강좌명이 바뀌어도 인원이 항상 표시되고, 이월 검색어도 실제 이름과 일치한다.
+     아직 한 번도 갱신하지 않았다면 앱에 적어둔 목록으로 대신한다. */
+  const dbTargets = words.length
+    ? stats.filter((s) => words.every((w) => flat(s.course).includes(w)))
+        .map((s) => ({ full: s.course, enrolled: s.enrolled, capacity: s.capacity }))
+        .sort((a, b) => a.full.localeCompare(b.full, "ko"))
     : [];
+  const listTargets = words.length
+    ? ALL_COURSES.filter((c) => words.every((w) => flat(c.full).includes(w)))
+        .map((c) => ({ full: c.full, enrolled: countOf(c.full), capacity: undefined }))
+    : [];
+  const fromDb = dbTargets.length > 0;
+  const targets = fromDb ? dbTargets : listTargets;
   const willRun = targets.filter((c) => !excludes.includes(c.full));
 
   React.useEffect(() => {
@@ -1509,6 +1681,8 @@ function TransferForm({ me }) {
             <div className="border border-slate-200 rounded-lg divide-y divide-slate-100 max-h-64 overflow-y-auto">
               {targets.map((c) => {
                 const off = excludes.includes(c.full);
+                const n = c.enrolled;
+                const cap = c.capacity || capacityOf(c.full);
                 return (
                   <button key={c.full} type="button" onClick={() => toggle(c.full)}
                     className={`flex items-center gap-2 w-full text-left px-3 py-2 text-sm ${off ? "bg-slate-50 text-slate-400 line-through" : "hover:bg-emerald-50"}`}>
@@ -1516,16 +1690,20 @@ function TransferForm({ me }) {
                       {!off && <CheckCircle2 size={12} className="text-white" />}
                     </span>
                     <span className="flex-1">{c.full}</span>
-                    {countOf(c.full) !== undefined && (
-                      <span className={`shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full ${off ? "bg-slate-100 text-slate-400" : countOf(c.full) === 0 ? "bg-slate-100 text-slate-500" : "bg-emerald-50 text-emerald-700"}`}>
-                        {countOf(c.full)}/{capacityOf(c.full)}
-                      </span>
-                    )}
+                    <span className={`shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full ${off ? "bg-slate-100 text-slate-400" : n === undefined ? "bg-slate-100 text-slate-400" : n === 0 ? "bg-slate-100 text-slate-500" : "bg-emerald-50 text-emerald-700"}`}>
+                      {n === undefined ? "–" : `${n}/${cap}`}
+                    </span>
                   </button>
                 );
               })}
             </div>
           ) : <p className="text-xs text-slate-400">해당하는 강좌가 없습니다.</p>}
+          {!fromDb && targets.length > 0 && (
+            <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mt-1.5">
+              앱에 적어둔 강좌 목록으로 보여주는 중입니다. 홈 화면에서 [수강인원 업데이트] 를 한 번 눌러주시면
+              실제 강좌와 인원으로 바뀝니다.
+            </p>
+          )}
           <p className="text-[11px] text-slate-400 mt-1.5">수강생이 0명인 강좌는 자동으로 건너뜁니다. 반변경자는 기존 반에서 <b>제외만</b> 되며, 새 반 등록은 직접 해주세요.</p>
 
         </div>
