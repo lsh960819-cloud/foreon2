@@ -1889,6 +1889,7 @@ function ReservationForm({ me, kind, options, seatLabel, seatPh }) {
   const [action, setAction] = useState("등록");
   const [dateStr, setDateStr] = useState(today());
   const [dong, setDong] = useState(""); const [ho, setHo] = useState(""); const [name, setName] = useState(""); const [seat, setSeat] = useState("");
+  const [gender, setGender] = useState("남자");   // 독서실: 남자석/여자석 구분
   const [amount, setAmount] = useState(""); const [done, setDone] = useState(null); const [saving, setSaving] = useState(false);
   const [timing, setTiming] = useState("endOfToday"); const [reason, setReason] = useState("");
   const [safe, setSafe] = useState(true);
@@ -1920,13 +1921,15 @@ function ReservationForm({ me, kind, options, seatLabel, seatPh }) {
     if (action === "등록" && !seat.trim()) { alert(`등록 시 ${seatLabel}는 필수입니다.`); return; }
     const amt = amount.trim() || (auto != null ? String(auto) : "");
     const productKey = kind === "독서실" ? `${optLabel}독서실` : `골프백(${optLabel})`;
+    // 독서실은 남자석/여자석이 나뉘어 있어 성별을 함께 보냅니다 (예: "남자 13")
+    const seatSend = kind === "독서실" && seat.trim() ? `${gender} ${seat.trim()}` : seat;
     setSaving(true);
     const at = nowLocal().replace("T", " ");
     // 기록 저장
-    await logWork({ kind, action, target: productKey, seat, member: name, dong, ho, amount: amt, timing: `${action === "등록" ? "등록일" : "해지일"} ${dateStr}${action === "취소" ? " · " + (timing === "endOfToday" ? "오늘24시" : "즉시") : ""}`, by: me.id, at });
+    await logWork({ kind, action, target: productKey, seat: seatSend, member: name, dong, ho, amount: amt, timing: `${action === "등록" ? "등록일" : "해지일"} ${dateStr}${action === "취소" ? " · " + (timing === "endOfToday" ? "오늘24시" : "즉시") : ""}`, by: me.id, at });
     if (canAutomate) {
       const { error } = await supabase.from("lesson_jobs").insert({
-        kind, action, course: productKey, member: name, dong, ho, seat, amount: amt,
+        kind, action, course: productKey, member: name, dong, ho, seat: seatSend, amount: amt,
         timing: action === "취소" ? timing : "", reason: reason || "관리사무소 요청",
         safe, status: "pending", by: me.id, at,
       });
@@ -1976,8 +1979,23 @@ function ReservationForm({ me, kind, options, seatLabel, seatPh }) {
           <Fld label={action === "등록" ? "등록일" : "해지일"}>
             <input type="date" value={dateStr} onChange={(e) => setDateStr(e.target.value)} className="rin" />
           </Fld>
+          {kind === "독서실" && (
+            <Fld label="남자석 / 여자석 *">
+              <div className="flex gap-1.5">
+                {["남자", "여자"].map((g) => (
+                  <button key={g} type="button" onClick={() => setGender(g)}
+                    className={`flex-1 text-sm py-2 rounded-lg border transition ${gender === g ? "bg-emerald-600 border-emerald-600 text-white font-medium" : "bg-white border-slate-200 text-slate-600"}`}>
+                    {g}
+                  </button>
+                ))}
+              </div>
+            </Fld>
+          )}
           <Fld label={seatLabel + " *"}>
             <input value={seat} onChange={(e) => setSeat(e.target.value)} placeholder={seatPh} className="rin" />
+            {kind === "골프백" && (
+              <p className="text-[11px] text-slate-400 mt-1">홀수 번호는 상단, 짝수 번호는 하단으로 자동 선택됩니다.</p>
+            )}
           </Fld>
         </div>
 
