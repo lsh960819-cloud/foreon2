@@ -19,7 +19,7 @@ const DEPT_OF = {
 /* 개인별 비밀번호 — 사무실: Office{번호}!26 (패턴형) / 데스크: 무작위(직원끼리 유추 방지) */
 const PW_OF = {
   foreon1: "Office1!26", foreon2: "Office2!26", foreon3: "Office3!26", foreon4: "Office4!26", foreon5: "Office5!26",
-  foreon6: "xQ4#nZt8Bw", foreon7: "Lp9$rVq3Xm", foreon8: "Gk6&wTf1Qz", foreon9: "Rn2@Xy7Lqe",
+  foreon6: "xQ4#nZt8Bw", foreon7: "tkddnjs123", foreon8: "Gk6&wTf1Qz", foreon9: "Rn2@Xy7Lqe",
 };
 const AI_ADMIN = "foreon4"; // 관리자 계정 (수강 시작 연월 선택 · 접수기간 수정 권한)
 
