@@ -96,6 +96,28 @@ def byb_login(user, pw, cookies):
     return st, js, txt
 
 
+# 로그인 1단계 응답의 auth_session_id를 다음 요청에 싣는 방법 후보 (되는 것을 자동으로 찾음)
+SESSION_WAYS = ["cookie", "x-auth-session-id", "auth-session-id", "bearer", "body", "query"]
+
+
+def session_parts(how, sid, cookies, body=None):
+    h, c, q = {}, dict(cookies), ""
+    body = dict(body) if body else None
+    if how == "cookie":
+        c["auth_session_id"] = sid
+    elif how == "x-auth-session-id":
+        h["X-Auth-Session-Id"] = sid
+    elif how == "auth-session-id":
+        h["Auth-Session-Id"] = sid
+    elif how == "bearer":
+        h["Authorization"] = f"Bearer {sid}"
+    elif how == "body":
+        body = {**(body or {}), "auth_session_id": sid}
+    elif how == "query":
+        q = "?" + urllib.parse.urlencode({"auth_session_id": sid})
+    return h, c, body, q
+
+
 def pick_auth(tok):
     """토큰 응답에서 manager API가 받아주는 Authorization 형식 찾기"""
     cands = []
@@ -471,23 +493,35 @@ def handle(b):
     if act == "login":
         cookies = {}
         st, js, txt = byb_login(b["user"], b["password"], cookies)
-        if st == 200 and js:
+        if st == 200 and js and (js.get("access_token") or js.get("id_token")):
             return {"auth": encode_auth({"a": pick_auth(js), "u": b["user"]})}
-        st2, _, txt2 = _req(f"{AUTH_BASE}/session/userinfo/otp/request", "POST", cookies=cookies)
-        if st2 != 200:
-            raise BybError(f"로그인 실패 ({st}): 아이디/비밀번호를 확인해 주세요. [{txt[:120]}] [{st2} {txt2[:120]}]")
-        # 인증번호 확인 후 토큰을 다시 받으려면 비밀번호가 필요 → 쿠키와 함께 임시로 돌려줌(브라우저 메모리에만 보관)
-        return {"needOtp": True, "pending": encode_auth({"c": cookies, "u": b["user"], "p": b["password"]})}
+        sid = (js or {}).get("auth_session_id")
+        if not sid:
+            raise BybError(f"로그인 실패 ({st}): 아이디/비밀번호를 확인해 주세요. [{txt[:150]}]")
+        tried = []
+        for how in SESSION_WAYS:
+            h, c, body, q = session_parts(how, sid, cookies)
+            st2, _, txt2 = _req(f"{AUTH_BASE}/session/userinfo/otp/request{q}", "POST", body, headers=h, cookies=c)
+            tried.append(f"{how}:{st2}")
+            if st2 == 200:
+                return {"needOtp": True, "pending": encode_auth(
+                    {"c": cookies, "u": b["user"], "p": b["password"], "sid": sid, "how": how})}
+        raise BybError(f"인증번호 요청 실패 [{', '.join(tried)}] [{txt[:200]}]")
 
     if act == "verify":
         pend = decode_auth(b["pending"])
-        cookies = pend["c"]
-        st, _, txt = _req(f"{AUTH_BASE}/session/userinfo/otp/verify", "POST", {"code": b["code"]}, cookies=cookies)
+        cookies, sid, how = pend["c"], pend["sid"], pend["how"]
+        h, c, body, q = session_parts(how, sid, cookies, {"code": b["code"]})
+        st, _, txt = _req(f"{AUTH_BASE}/session/userinfo/otp/verify{q}", "POST", body, headers=h, cookies=c)
         if st != 200:
             raise BybError(f"인증번호 확인 실패 ({st}): {txt[:150]}")
-        st, js, txt = byb_login(pend["u"], pend["p"], cookies)
-        if st != 200:
-            raise BybError(f"토큰 발급 실패 ({st}): {txt[:150]}")
+        h, c, _, q = session_parts(how, sid, cookies)
+        form = {"grant_type": "password", "client_id": CLIENT_ID, "username": pend["u"], "password": pend["p"]}
+        if how == "body":
+            form["auth_session_id"] = sid
+        st, js, txt = _req(f"{AUTH_BASE}/oauth2/token{q}", "POST", form, headers=h, cookies=c, form=True)
+        if st != 200 or not js:
+            raise BybError(f"토큰 발급 실패 ({st}, {how}): {txt[:200]}")
         return {"auth": encode_auth({"a": pick_auth(js), "u": pend["u"]})}
 
     if act == "build":
