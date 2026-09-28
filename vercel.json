@@ -1,0 +1,8 @@
+{
+  "functions": {
+    "api/attendance.py": {
+      "maxDuration": 60,
+      "includeFiles": "api/_templates/**"
+    }
+  }
+}
