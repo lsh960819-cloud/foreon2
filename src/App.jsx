@@ -3,7 +3,7 @@ import {
   LogIn, LogOut, Search, PackageSearch, ClipboardList, CalendarDays, Home as HomeIcon,
   Plus, X, User, Loader2, MessageSquareWarning, ArrowLeftRight, Inbox, Send, Upload,
   CheckCircle2, Clock, FileText, GraduationCap, PlayCircle, Pencil, Trash2, Copy,
-  FolderOpen, Download, RefreshCw
+  FolderOpen, Download, RefreshCw, CalendarCheck
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { supabase } from "./supabaseClient.js";
@@ -368,6 +368,7 @@ export default function App() {
     { id: "lessons", label: "등록·취소·이월", icon: GraduationCap },
     { id: "worklogs", label: "작업 기록", icon: FileText },
     { id: "files", label: "자료실", icon: FolderOpen },
+    { id: "attendance", label: "출석부 생성", icon: CalendarCheck },
     ...(isOffice ? [{ id: "officelog", label: "사무실 업무일지", icon: ClipboardList }] : []),
     { id: "link", label: "외부 연동", icon: ArrowLeftRight },
   ];
@@ -410,6 +411,7 @@ export default function App() {
         {tab === "lessons" && <Registrations me={me} />}
         {tab === "worklogs" && <WorkLogs me={me} />}
         {tab === "files" && <SharedFiles me={me} />}
+        {tab === "attendance" && <Attendance />}
         {tab === "officelog" && isOffice && <OfficeLog me={me} />}
         {tab === "link" && <LinkInfo />}
       </div>
@@ -2165,6 +2167,169 @@ function LinkInfo() {
         <div className="rounded-lg bg-slate-50 border border-slate-200 p-3"><b>② 자동화 스크립트 연결 (현실적)</b><br />이미 쓰시는 Selenium/Playwright 스크립트를 서버에서 돌려 취소를 대신 처리. 가능하지만 사이트가 바뀌면 손봐야 합니다.</div>
         <div className="rounded-lg bg-slate-50 border border-slate-200 p-3"><b>③ 브라우저에서 바로 조작</b><br />보안(CORS) 때문에 <b>불가능</b>합니다.</div>
       </div>
+    </div>
+  );
+}
+
+/* ─────────────────────── 출석부 생성 (바이비 연동) */
+const ATT_KINDS = ["수영", "농구", "축구", "GX"];
+const attKindOf = (n) => (n.includes("수영") ? "수영" : n.includes("농구") ? "농구" : n.includes("축구") ? "축구" : "GX");
+const attInput = "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500";
+
+async function attCall(body) {
+  const r = await fetch("/api/attendance", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  let j = {};
+  try { j = await r.json(); } catch {}
+  if (!r.ok) throw new Error(j.error || `서버 오류 (${r.status})`);
+  return j;
+}
+
+function Attendance() {
+  const next = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1);
+  const [step, setStep] = useState("login"); // login → otp → ready
+  const [user, setUser] = useState(() => { try { return localStorage.getItem("byb_user") || ""; } catch { return ""; } });
+  const [pw, setPw] = useState("");
+  const [code, setCode] = useState("");
+  const [pending, setPending] = useState(null); // 인증 대기 정보 (메모리에만 보관)
+  const [auth, setAuth] = useState(null);       // 바이비 로그인 토큰 (메모리에만 보관)
+  const [year, setYear] = useState(next.getFullYear());
+  const [month, setMonth] = useState(next.getMonth() + 1);
+  const [holi, setHoli] = useState("");
+  const [kinds, setKinds] = useState({ 수영: true, 농구: true, 축구: true, GX: true });
+  const [skipEmpty, setSkipEmpty] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [prog, setProg] = useState(null);
+  const [log, setLog] = useState([]);
+
+  const guard = async (fn) => {
+    setBusy(true); setErr("");
+    try { await fn(); }
+    catch (e) {
+      setErr(e.message);
+      if (/만료|로그인 정보/.test(e.message)) { setAuth(null); setStep("login"); }
+    } finally { setBusy(false); }
+  };
+
+  const doLogin = () => guard(async () => {
+    const j = await attCall({ action: "login", user, password: pw });
+    try { localStorage.setItem("byb_user", user); } catch {}
+    setPw("");
+    if (j.auth) { setAuth(j.auth); setStep("ready"); }
+    else { setPending(j.pending); setStep("otp"); }
+  });
+
+  const doVerify = () => guard(async () => {
+    const j = await attCall({ action: "verify", pending, code });
+    setAuth(j.auth); setPending(null); setCode(""); setStep("ready");
+  });
+
+  const doRun = () => guard(async () => {
+    setLog([]);
+    setProg({ label: "강좌 목록 불러오는 중", done: 0, total: 1 });
+    const { windows } = await attCall({ action: "windows", auth });
+    const list = windows.filter((w) => kinds[attKindOf(w.name)]);
+    if (!list.length) throw new Error("선택한 종류의 강좌가 없어요.");
+    const chunks = [];
+    for (let i = 0; i < list.length; i += 10) chunks.push(list.slice(i, i + 10));
+    const got = {};
+    let done = 0, idx = 0;
+    setProg({ label: "강좌별 명단 수집 중", done: 0, total: list.length });
+    const worker = async () => {
+      while (idx < chunks.length) {
+        const c = chunks[idx++];
+        const { members } = await attCall({ action: "members", auth, year, month, windows: c });
+        Object.entries(members).forEach(([n, m]) => {
+          const prev = got[n] || [];
+          got[n] = prev.concat(m.filter((x) => !prev.some((p) => p.name === x.name && p.phone === x.phone)));
+        });
+        done += c.length;
+        setProg({ label: "강좌별 명단 수집 중", done, total: list.length });
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    const names = [...new Set(list.map((w) => w.name))];
+    const data = names.map((n) => [n, got[n] || []]);
+    setProg({ label: "엑셀 만드는 중", done: list.length, total: list.length });
+    const holidays = holi.split(/[,\s]+/).map(Number).filter((n) => n >= 1 && n <= 31);
+    const r = await attCall({ action: "build", year, month, holidays, skipEmpty, data });
+    const bin = atob(r.zip);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/zip" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = `출석부_${year}년${String(month).padStart(2, "0")}월.zip`; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    const total = data.reduce((s, [, m]) => s + m.length, 0);
+    setLog([`강좌 ${data.length}개 · 회원 ${total}명`, ...(r.log || [])]);
+    setProg(null);
+  });
+
+  const btn = "rounded-lg bg-emerald-600 text-white px-4 py-2 text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-1.5";
+
+  return (
+    <div>
+      <Panel title="출석부 생성 (바이비 명단 → 엑셀)">
+        {step === "login" && (
+          <div className="grid sm:grid-cols-3 gap-2 items-end">
+            <L label="바이비 아이디"><input className={attInput} value={user} onChange={(e) => setUser(e.target.value)} /></L>
+            <L label="비밀번호"><input type="password" className={attInput} value={pw} onChange={(e) => setPw(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && user && pw && doLogin()} /></L>
+            <button className={btn} disabled={busy || !user || !pw} onClick={doLogin}>
+              {busy ? <Loader2 size={15} className="animate-spin" /> : <LogIn size={15} />} 바이비 로그인
+            </button>
+          </div>
+        )}
+        {step === "otp" && (
+          <div className="grid sm:grid-cols-3 gap-2 items-end">
+            <L label="휴대폰으로 받은 인증번호"><input className={attInput} value={code} inputMode="numeric" onChange={(e) => setCode(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && code && doVerify()} /></L>
+            <button className={btn} disabled={busy || !code} onClick={doVerify}>
+              {busy ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />} 인증 확인
+            </button>
+            <button className="text-sm text-slate-500 underline" onClick={() => { setStep("login"); setPending(null); }}>처음부터</button>
+          </div>
+        )}
+        {step === "ready" && (
+          <div className="space-y-3">
+            <p className="text-xs text-emerald-700 flex items-center gap-1"><CheckCircle2 size={14} /> 바이비 로그인됨 ({user}) — 이 창을 닫으면 로그인 정보는 사라져요.</p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <L label="년도"><input type="number" className={attInput} value={year} onChange={(e) => setYear(+e.target.value)} /></L>
+              <L label="월">
+                <select className={attInput} value={month} onChange={(e) => setMonth(+e.target.value)}>
+                  {Array.from({ length: 12 }, (_, i) => <option key={i} value={i + 1}>{i + 1}월</option>)}
+                </select>
+              </L>
+              <div className="col-span-2"><L label="공휴일 (쉬는 날, 쉼표로)"><input className={attInput} placeholder="예: 3, 9" value={holi} onChange={(e) => setHoli(e.target.value)} /></L></div>
+            </div>
+            <div className="flex flex-wrap gap-3 text-sm">
+              {ATT_KINDS.map((k) => (
+                <label key={k} className="flex items-center gap-1.5">
+                  <input type="checkbox" checked={kinds[k]} onChange={(e) => setKinds({ ...kinds, [k]: e.target.checked })} /> {k}{k === "수영" ? " (강사별 파일)" : ""}
+                </label>
+              ))}
+              <label className="flex items-center gap-1.5 text-slate-500">
+                <input type="checkbox" checked={skipEmpty} onChange={(e) => setSkipEmpty(e.target.checked)} /> 0명 강좌 제외
+              </label>
+            </div>
+            <button className={btn} disabled={busy} onClick={doRun}>
+              {busy ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />} 출석부 생성
+            </button>
+          </div>
+        )}
+        {prog && (
+          <div className="mt-3">
+            <div className="flex justify-between text-xs text-slate-500 mb-1"><span>{prog.label}</span><span>{prog.done}/{prog.total}</span></div>
+            <div className="h-2 rounded bg-slate-100 overflow-hidden"><div className="h-full bg-emerald-500 transition-all" style={{ width: `${(prog.done / Math.max(prog.total, 1)) * 100}%` }} /></div>
+          </div>
+        )}
+        {err && <p className="mt-3 text-sm text-red-600 break-all">⚠ {err}</p>}
+      </Panel>
+      {log.length > 0 && (
+        <Panel title="생성 결과">
+          <pre className="text-xs text-slate-600 whitespace-pre-wrap max-h-72 overflow-auto">{log.join("\n")}</pre>
+        </Panel>
+      )}
     </div>
   );
 }
