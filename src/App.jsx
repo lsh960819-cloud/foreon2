@@ -2227,7 +2227,13 @@ function Attendance() {
   const doRun = () => guard(async () => {
     setLog([]);
     setProg({ label: "강좌 목록 불러오는 중", done: 0, total: 1 });
-    const { windows } = await attCall({ action: "windows", auth });
+    let cur = auth; // 5분마다 서버가 토큰을 새로 받아오면 교체
+    const withAuth = async (body) => {
+      const j = await attCall({ ...body, auth: cur });
+      if (j.auth) { cur = j.auth; setAuth(j.auth); }
+      return j;
+    };
+    const { windows } = await withAuth({ action: "windows" });
     const list = windows.filter((w) => kinds[attKindOf(w.name)]);
     if (!list.length) throw new Error("선택한 종류의 강좌가 없어요.");
     const chunks = [];
@@ -2238,7 +2244,7 @@ function Attendance() {
     const worker = async () => {
       while (idx < chunks.length) {
         const c = chunks[idx++];
-        const { members } = await attCall({ action: "members", auth, year, month, windows: c });
+        const { members } = await withAuth({ action: "members", year, month, windows: c });
         Object.entries(members).forEach(([n, m]) => {
           const prev = got[n] || [];
           got[n] = prev.concat(m.filter((x) => !prev.some((p) => p.name === x.name && p.phone === x.phone)));

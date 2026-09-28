@@ -97,13 +97,15 @@ def byb_login(user, pw, cookies):
 
 
 # 로그인 1단계 응답의 auth_session_id를 다음 요청에 싣는 방법 후보 (되는 것을 자동으로 찾음)
-SESSION_WAYS = ["cookie", "x-auth-session-id", "auth-session-id", "bearer", "body", "query"]
+SESSION_WAYS = ["cbasid"]   # 바이비 로그인 화면이 실제로 쓰는 방식: cbasid 헤더
 
 
 def session_parts(how, sid, cookies, body=None):
     h, c, q = {}, dict(cookies), ""
     body = dict(body) if body else None
-    if how == "cookie":
+    if how == "cbasid":
+        h["cbasid"] = sid
+    elif how == "cookie":
         c["auth_session_id"] = sid
     elif how == "x-auth-session-id":
         h["X-Auth-Session-Id"] = sid
@@ -121,19 +123,43 @@ def session_parts(how, sid, cookies, body=None):
 def pick_auth(tok):
     """토큰 응답에서 manager API가 받아주는 Authorization 형식 찾기"""
     cands = []
-    for key in ("access_token", "id_token", "accessToken", "idToken"):
+    for key in ("access_token", "id_token"):
         v = (tok or {}).get(key)
         if v:
-            cands += [f"Bearer {v}", v]
-    for a in cands:
+            cands += [(f"Bearer {v}", key), (v, key)]
+    for a, key in cands:
         st, _, _ = _req(f"{API_BASE}/membermanage/manager/manager/current", headers={"Authorization": a})
         if st == 200:
-            return a
+            return a, key
     raise BybError(f"토큰 형식 확인 실패 (응답 키: {list((tok or {}).keys())})")
+
+
+REFRESHED = {}
+
+
+def refresh(auth):
+    """access 토큰(5분짜리)이 만료되면 refresh 토큰으로 새로 받기"""
+    if not auth.get("r"):
+        return False
+    st, js, _ = _req(f"{AUTH_BASE}/oauth2/token", "POST",
+                     {"grant_type": "refresh_token", "client_id": CLIENT_ID, "refresh_token": auth["r"]}, form=True)
+    if st != 200 or not js:
+        return False
+    old_is_bearer = auth["a"].startswith("Bearer ")
+    # 처음 통과한 토큰 종류(access/id)를 그대로 유지
+    kind = auth.get("k", "access_token")
+    new = js.get(kind) or js.get("access_token")
+    auth["a"] = f"Bearer {new}" if old_is_bearer else new
+    if js.get("refresh_token"):
+        auth["r"] = js["refresh_token"]
+    REFRESHED["auth"] = encode_auth(auth)
+    return True
 
 
 def api(auth, method, path, body=None):
     st, js, txt = _req(f"{API_BASE}{path}", method, body, headers={"Authorization": auth["a"]})
+    if st == 401 and refresh(auth):
+        st, js, txt = _req(f"{API_BASE}{path}", method, body, headers={"Authorization": auth["a"]})
     if st == 401:
         raise BybError("로그인이 만료됐어요. 다시 로그인해 주세요.")
     if st != 200:
@@ -473,6 +499,11 @@ def build_zip(data, year, month, holidays, skip_empty=True):
 
 
 # ───────────── HTTP 핸들러 ─────────────
+def make_auth(tok, user):
+    a, kind = pick_auth(tok)
+    return encode_auth({"a": a, "k": kind, "u": user, "r": tok.get("refresh_token")})
+
+
 def encode_auth(d):
     return base64.urlsafe_b64encode(json.dumps(d).encode()).decode()
 
@@ -494,7 +525,7 @@ def handle(b):
         cookies = {}
         st, js, txt = byb_login(b["user"], b["password"], cookies)
         if st == 200 and js and (js.get("access_token") or js.get("id_token")):
-            return {"auth": encode_auth({"a": pick_auth(js), "u": b["user"]})}
+            return {"auth": make_auth(js, b["user"])}
         sid = (js or {}).get("auth_session_id")
         if not sid:
             raise BybError(f"로그인 실패 ({st}): 아이디/비밀번호를 확인해 주세요. [{txt[:150]}]")
@@ -522,7 +553,7 @@ def handle(b):
         st, js, txt = _req(f"{AUTH_BASE}/oauth2/token{q}", "POST", form, headers=h, cookies=c, form=True)
         if st != 200 or not js:
             raise BybError(f"토큰 발급 실패 ({st}, {how}): {txt[:200]}")
-        return {"auth": encode_auth({"a": pick_auth(js), "u": pend["u"]})}
+        return {"auth": make_auth(js, pend["u"])}
 
     if act == "build":
         LOG.clear()
@@ -559,7 +590,11 @@ class handler(BaseHTTPRequestHandler):
         try:
             n = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(n) or b"{}")
-            self._send(200, handle(body))
+            REFRESHED.clear()
+            out = handle(body)
+            if REFRESHED.get("auth"):
+                out["auth"] = REFRESHED["auth"]
+            self._send(200, out)
         except BybError as e:
             self._send(400, {"error": str(e)})
         except Exception as e:  # noqa
