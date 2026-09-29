@@ -152,14 +152,23 @@ def refresh(auth):
     auth["a"] = f"Bearer {new}" if old_is_bearer else new
     if js.get("refresh_token"):
         auth["r"] = js["refresh_token"]
+    if js.get("access_token"):
+        auth["t"] = js["access_token"]
     REFRESHED["auth"] = encode_auth(auth)
     return True
 
 
+def _hdr(auth):
+    h = {"Authorization": auth["a"]}
+    if auth.get("t"):
+        h["accesstoken"] = auth["t"]
+    return h
+
+
 def api(auth, method, path, body=None):
-    st, js, txt = _req(f"{API_BASE}{path}", method, body, headers={"Authorization": auth["a"]})
+    st, js, txt = _req(f"{API_BASE}{path}", method, body, headers=_hdr(auth))
     if st == 401 and refresh(auth):
-        st, js, txt = _req(f"{API_BASE}{path}", method, body, headers={"Authorization": auth["a"]})
+        st, js, txt = _req(f"{API_BASE}{path}", method, body, headers=_hdr(auth))
     if st == 401:
         raise BybError("로그인이 만료됐어요. 다시 로그인해 주세요.")
     if st != 200:
@@ -229,7 +238,7 @@ def members_of(auth, wid, year, month, me, with_meta=False):
             uid = find_key(it, ID_KEYS)
             if uid and uid != me and uid not in ids:
                 ids.append(uid)
-                meta[uid] = {"rid": it.get("id"), "at": it.get("createdAt") or ""}
+                meta[uid] = {"rid": it.get("reservationId") or it.get("id"), "at": it.get("createdAt") or ""}
         if len(its) < 100:
             break
         pg += 1
@@ -718,7 +727,7 @@ def build_apply_zip(data, year, month):
 # ───────────── HTTP 핸들러 ─────────────
 def make_auth(tok, user):
     a, kind = pick_auth(tok)
-    return encode_auth({"a": a, "k": kind, "u": user, "r": tok.get("refresh_token")})
+    return encode_auth({"a": a, "k": kind, "u": user, "r": tok.get("refresh_token"), "t": tok.get("access_token")})
 
 
 def encode_auth(d):
@@ -788,6 +797,26 @@ def handle(b):
 
     if act == "windows":
         return {"windows": list_windows(auth, b.get("keywords"))}
+
+    if act == "cancel":   # 수강 취소 + 환불 (바이비 [환불] 버튼과 같은 요청)
+        rid = str(b["rid"])
+        if not re.fullmatch(r"[0-9a-f\-]{36}", rid):
+            raise BybError("예약 번호가 올바르지 않아요.")
+        amount = int(b["amount"])
+        cur = api(auth, "GET", f"/community/manager/v1/reservations/{rid}") or {}
+        rv = cur.get("reservation") or {}
+        title = ((rv.get("window") or {}).get("title") or "").replace("/", "")
+        status = (rv.get("latestRevision") or {}).get("status")
+        if b.get("course") and b["course"].replace("/", "") != title:
+            raise BybError(f"강좌가 달라요: 선택={b['course']} / 예약={title}")
+        if status != "CONFIRMED":
+            raise BybError(f"이미 처리된 예약이에요 (상태: {status})")
+        paid = sum(x.get("amount", 0) for x in (api(auth, "GET", f"/community/manager/v1/receipts?reservationId={rid}") or {}).get("monthlyPaidAmountList", []))
+        if paid and amount > paid:
+            raise BybError(f"환불액 {amount:,}원이 결제액 {paid:,}원보다 커요.")
+        api(auth, "DELETE", f"/community/manager/v1/reservations/{rid}",
+            {"reason": (b.get("reason") or "관리사무소 요청")[:100], "refundAmount": amount})
+        return {"ok": True, "paid": paid, "title": title}
 
     if act == "members":
         y, m = int(b["year"]), int(b["month"])

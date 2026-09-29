@@ -2437,6 +2437,17 @@ function LessonPanel({ call }) {
   const [priceStr, setPriceStr] = useState("");
   const [manual, setManual] = useState("");
   const [busy, setBusy] = useState(""); const [err, setErr] = useState("");
+  const [confirm, setConfirm] = useState(false); const [reason, setReason] = useState(""); const [doneMsg, setDoneMsg] = useState("");
+
+  const doCancel = async () => {
+    setBusy("바이비에서 취소·환불 처리 중"); setErr(""); setDoneMsg("");
+    try {
+      await call({ action: "cancel", rid: pick.rid, amount, reason, course });
+      setDoneMsg(`${pick.name} 취소 완료 · 환불 ${amount.toLocaleString()}원`);
+      setConfirm(false); setPick(null); setManual("");
+      await loadMembers();
+    } catch (e) { setErr(e.message); } finally { setBusy(""); }
+  };
 
   const loadCourses = async () => {
     setBusy("강좌 불러오는 중"); setErr(""); setCourse(""); setMembers(null); setPick(null);
@@ -2452,7 +2463,7 @@ function LessonPanel({ call }) {
   const loadMembers = async (c = course) => {
     const item = list.find((x) => x.name === c);
     if (!item) return;
-    setBusy("수강생 불러오는 중"); setErr(""); setPick(null);
+    setBusy("수강생 불러오는 중"); setErr(""); setPick(null); setConfirm(false);
     try {
       const { members: r } = await call({ action: "members", meta: true, year: ym.y, month: ym.m,
         windows: item.ids.map((id) => ({ id, name: c })) });
@@ -2542,9 +2553,28 @@ function LessonPanel({ call }) {
           <p className="text-lg font-bold mt-1">{action === "등록" ? "차감" : "환불"} {amount.toLocaleString()}원{manual.trim() ? " (수동)" : ""}</p>
         </div>
       )}
-      <button disabled className="w-full rounded-lg bg-slate-300 text-white text-sm font-medium py-2.5" title="바이비 등록·환불 요청 형식 확인 후 연결 예정">
-        바이비에 {action} 실행 (준비 중 — 금액 확인용)
-      </button>
+      {action === "취소" ? (
+        confirm ? (
+          <div className="rounded-xl border-2 border-rose-300 bg-rose-50 p-3 space-y-2">
+            <p className="text-sm text-rose-900"><b>{pick.name}</b> ({pick.dong}동 {pick.ho}호)<br />{course}<br />{ym.m}월 수강 취소 · <b>환불 {amount.toLocaleString()}원</b></p>
+            <L label="사유 (바이비에 기록)"><input className={attInput} value={reason} onChange={(e) => setReason(e.target.value)} /></L>
+            <div className="flex gap-2">
+              <button onClick={doCancel} disabled={!!busy} className="flex-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-sm font-medium py-2">네, 바이비에서 취소·환불</button>
+              <button onClick={() => setConfirm(false)} className="flex-1 rounded-lg border border-slate-300 text-slate-600 text-sm py-2">돌아가기</button>
+            </div>
+          </div>
+        ) : (
+          <button disabled={!pick || !!busy} onClick={() => { setReason(`관리사무소 요청 ${new Date().toLocaleString("ko-KR")}`); setConfirm(true); }}
+            className="w-full rounded-lg bg-rose-600 hover:bg-rose-700 disabled:opacity-40 text-white text-sm font-medium py-2.5">
+            바이비에 취소·환불 실행
+          </button>
+        )
+      ) : (
+        <button disabled className="w-full rounded-lg bg-slate-300 text-white text-sm font-medium py-2.5">
+          바이비 등록 실행 (준비 중 — 지금은 금액 확인용)
+        </button>
+      )}
+      {doneMsg && <p className="text-sm text-emerald-700">✔ {doneMsg}</p>}
       {busy && <p className="text-xs text-slate-500 flex items-center gap-1"><Loader2 size={13} className="animate-spin" /> {busy}</p>}
       {err && <p className="text-sm text-red-600 break-all">⚠ {err}</p>}
     </div>
