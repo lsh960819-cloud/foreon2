@@ -535,26 +535,53 @@ def _hhmm(t):
     return (int(m.group(1)), int(m.group(2) or 0)) if m else None
 
 
-def retime_sheet(ws, src_title, new_title):
-    """복사한 시트의 강사·요일·시간 문구를 새 강좌에 맞게 바꿈"""
+def class_group(title):
+    """'1~2학년화16시…' → '1~2학년', '성인여성수10시…' → '성인여성' (없으면 '')"""
+    inner = title.split("(")[-1]
+    m = re.match(r"(.*?)[월화수목금토일]+\d", inner)
+    return m.group(1) if m else ""
+
+
+def pick_source(samples, cname):
+    """새 강좌와 가장 비슷한 시트: 같은 종목 > 주 횟수 > 대상 > 요일 순으로 점수"""
+    base, day, _ = parse_class(cname)
+    grp = class_group(cname)
+
+    def score(ws):
+        b2, d2, _ = parse_class(ws.title)
+        g2 = class_group(ws.title)
+        return ((b2 == base) * 100 + (len(d2) == len(day)) * 20 + (g2 == grp) * 10
+                + (is_adult(g2) == is_adult(grp)) * 5 + (d2 == day) * 1)
+    return max(samples, key=score)
+
+
+def _line(ws, key):
+    for r in range(6, 13):
+        v = ws.cell(r, 1).value
+        if isinstance(v, str) and key in v:
+            return r, v
+    return None, None
+
+
+def retime_sheet(ws, src_title, new_title, samples=()):
+    """복사한 시트의 강사·요일·시간·안내문(A6~A12)을 새 강좌명에 맞게 고침"""
     _, sday, sins = parse_class(src_title)
     _, nday, nins = parse_class(new_title)
     stime = re.search(r"\d{1,2}시(?:\d{1,2}분)?", src_title.split("(")[-1])
     ntime = re.search(r"\d{1,2}시(?:\d{1,2}분)?", new_title.split("(")[-1])
-    for row in ws.iter_rows(min_row=4, max_row=13):
-        for c in row:
-            v = c.value
-            if not isinstance(v, str) or v.startswith("="):
-                continue
-            if "강사" in v and sins and nins:
-                v = v.replace(sins, nins)
-            if "요일" in v and nday:
-                v = re.sub(r"요일:\s*[^/]*/", f"요일: {' , '.join(nday)} /", v)
-            if "시간" in v and stime and ntime:
-                v = v.replace(stime.group(0), ntime.group(0))
-            if "매주" in v and sday and nday and sday != nday:
-                v = v.replace(",".join(sday), ",".join(nday)).replace(f"주{len(sday)}회", f"주{len(nday)}회")
-            c.value = v
+    # 강사 / 요일 / 시간 (G4~G5)
+    for r in (4, 5):
+        c = ws.cell(r, 7)
+        v = c.value
+        if not isinstance(v, str) or v.startswith("="):
+            continue
+        if "강사" in v and nins:
+            v = re.sub(r"(강사\s*:?\s*)[가-힣]+", lambda m: m.group(1) + nins, v, count=1)
+        if "요일" in v and nday:
+            v = re.sub(r"요일:\s*[^/]*/", f"요일: {' , '.join(nday)} /", v)
+        if "시간" in v and stime and ntime:
+            v = v.replace(stime.group(0), ntime.group(0))
+        c.value = v
     # 시간 칸 (예: 16:00 ~ 17:00) : 원본 수업 길이 유지
     a = ws["A15"].value
     st, nt = _hhmm(stime.group(0) if stime else ""), _hhmm(ntime.group(0) if ntime else "")
@@ -566,6 +593,59 @@ def retime_sheet(ws, src_title, new_title):
             e0 = s0 + dur
             ws["A15"].value = a.replace(f"{tm[0][0]}:{tm[0][1]}", f"{s0 // 60:02d}:{s0 % 60:02d}", 1) \
                                .replace(f"{tm[1][0]}:{tm[1][1]}", f"{e0 // 60:02d}:{e0 % 60:02d}", 1)
+
+
+def is_adult(grp):
+    return (not grp) or "성인" in grp
+
+
+def normalize_notice(ws, samples):
+    """안내문(A6~A12)을 시트명(=강좌명) 기준으로 맞춤: 요일·주횟수·강습료·대상"""
+    base, day, _ = parse_class(ws.title)
+    grp = class_group(ws.title)
+    n = len(day)
+    if not n:
+        return
+
+    def donor(pred):
+        c = [w for w in samples if w is not ws and pred(w)]
+        c.sort(key=lambda w: parse_class(w.title)[0] != base)   # 같은 종목 우선
+        return c[0] if c else None
+
+    # 강습료·일할계산: 주 횟수(월 4N회)와 안 맞으면 같은 횟수 시트의 문구 사용
+    r, v = _line(ws, "강습료는")
+    m = re.search(r"월\s*(\d+)회", v or "")
+    if r and m and int(m.group(1)) != 4 * n:
+        d = donor(lambda w: len(parse_class(w.title)[1]) == n and
+                  (re.search(r"월\s*(\d+)회", _line(w, "강습료는")[1] or "") or [0, 0])[1] == str(4 * n))
+        if d:
+            for key in ("강습료는", "일할계산"):
+                r1, _ = _line(ws, key)
+                _, v2 = _line(d, key)
+                if r1 and v2:
+                    ws.cell(r1, 1).value = v2
+    # 대상: 어린이/학년 강좌는 강좌명의 대상으로, 성인↔어린이가 뒤바뀐 경우 같은 부류 문구 사용
+    r, v = _line(ws, "강습대상은")
+    if r and grp and ("농구" in base or "축구" in base):
+        child_text = "성인은 불가능" in v
+        if is_adult(grp) and child_text or (not is_adult(grp)) and not child_text:
+            d = donor(lambda w: is_adult(class_group(w.title)) == is_adult(grp) and parse_class(w.title)[0] == base)
+            if d and _line(d, "강습대상은")[1]:
+                v = _line(d, "강습대상은")[1]
+        if not is_adult(grp) and not (grp == "중학생" and "중1~3" in v):
+            v = re.sub(r"강습대상은\s*.+?이며", f"강습대상은 {grp}이며", v, count=1)
+        ws.cell(r, 1).value = v
+    # 요일·주 횟수, 특정 강좌 전용 문구 정리
+    for r in range(6, 13):
+        c = ws.cell(r, 1)
+        v = c.value
+        if not isinstance(v, str) or v.startswith("="):
+            continue
+        if "매주" in v:
+            v = re.sub(r"매주\s*[월화수목금토일](?:\s*,\s*[월화수목금토일])*", "매주 " + ",".join(day), v, count=1)
+            v = re.sub(r"주\d회", f"주{n}회", v)
+        v = re.sub(r"\s*\d{1,2}/\d{1,2}\([월화수목금토일]\)\s*신규개강", "", v)
+        c.value = v
 
 
 def fill_apply(ws, members):
@@ -591,13 +671,11 @@ def build_apply_workbook(tpl, classes, data, month, out_path):
         if title in existing:
             ws = existing[title]
         else:
-            base, day, _ = parse_class(cname)
-            src = next((s for s in samples if parse_class(s.title)[0] == base and parse_class(s.title)[1] == day), None) \
-                or next((s for s in samples if parse_class(s.title)[0] == base), None) \
-                or next((s for s in samples if parse_class(s.title)[1] == day), samples[0])
+            src = pick_source(samples, cname)
             ws = clone_sheet(wb, src, title)
-            retime_sheet(ws, src.title, cname)
+            retime_sheet(ws, src.title, cname, samples)
             print(f"  + 새 시트: {title}  (복사 원본: {src.title})")
+        normalize_notice(ws, samples)
         fill_apply(ws, data[cname])
         made.append(ws)
     for ws in list(wb.worksheets):
