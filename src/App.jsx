@@ -369,6 +369,7 @@ export default function App() {
     { id: "worklogs", label: "작업 기록", icon: FileText },
     { id: "files", label: "자료실", icon: FolderOpen },
     { id: "attendance", label: "출석부 생성", icon: CalendarCheck },
+    { id: "apply", label: "신청서 생성", icon: FileText },
     ...(isOffice ? [{ id: "officelog", label: "사무실 업무일지", icon: ClipboardList }] : []),
     { id: "link", label: "외부 연동", icon: ArrowLeftRight },
   ];
@@ -411,7 +412,8 @@ export default function App() {
         {tab === "lessons" && <Registrations me={me} />}
         {tab === "worklogs" && <WorkLogs me={me} />}
         {tab === "files" && <SharedFiles me={me} />}
-        {tab === "attendance" && <Attendance />}
+        {tab === "attendance" && <Attendance key="att" />}
+        {tab === "apply" && <Attendance key="apply" mode="apply" />}
         {tab === "officelog" && isOffice && <OfficeLog me={me} />}
         {tab === "link" && <LinkInfo />}
       </div>
@@ -2184,14 +2186,20 @@ async function attCall(body) {
   return j;
 }
 
-function Attendance() {
+const APPLY_KEYWORDS = ["농구", "축구", "2단지 요가", "2단지 줌바", "2단지 매트", "2단지 방송", "2단지 근력", "수영", "아쿠아", "2단지 타바타"];
+let BYB_AUTH = null; // 바이비 로그인 토큰: 탭을 옮겨도 유지, 새로고침/닫으면 사라짐
+
+function Attendance({ mode = "attendance" }) {
+  const isApply = mode === "apply";
   const next = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1);
-  const [step, setStep] = useState("login"); // login → otp → ready
+  const [step, setStep] = useState(() => (BYB_AUTH ? "ready" : "login")); // login → otp → ready
   const [user, setUser] = useState(() => { try { return localStorage.getItem("byb_user") || ""; } catch { return ""; } });
   const [pw, setPw] = useState("");
   const [code, setCode] = useState("");
   const [pending, setPending] = useState(null); // 인증 대기 정보 (메모리에만 보관)
-  const [auth, setAuth] = useState(null);       // 바이비 로그인 토큰 (메모리에만 보관)
+  const [auth, setAuthState] = useState(BYB_AUTH); // 바이비 로그인 토큰 (메모리에만 보관)
+  const setAuth = (a) => { BYB_AUTH = a; setAuthState(a); };
+  const [kws, setKws] = useState(() => Object.fromEntries(APPLY_KEYWORDS.map((k) => [k, true])));
   const [year, setYear] = useState(next.getFullYear());
   const [month, setMonth] = useState(next.getMonth() + 1);
   const [holi, setHoli] = useState("");
@@ -2233,9 +2241,14 @@ function Attendance() {
       if (j.auth) { cur = j.auth; setAuth(j.auth); }
       return j;
     };
-    const { windows } = await withAuth({ action: "windows" });
-    const list = windows.filter((w) => kinds[attKindOf(w.name)]);
+    const keywords = APPLY_KEYWORDS.filter((k) => kws[k]);
+    if (isApply && !keywords.length) throw new Error("검색할 강좌를 하나 이상 골라 주세요.");
+    const { windows } = await withAuth(isApply ? { action: "windows", keywords } : { action: "windows" });
+    const list = isApply ? windows : windows.filter((w) => kinds[attKindOf(w.name)]);
     if (!list.length) throw new Error("선택한 종류의 강좌가 없어요.");
+    // 신청서: N월 신청서 = (N-1)월 창구 명단
+    const src = isApply ? new Date(year, month - 2, 1) : new Date(year, month - 1, 1);
+    const sy = src.getFullYear(), sm = src.getMonth() + 1;
     const chunks = [];
     for (let i = 0; i < list.length; i += 10) chunks.push(list.slice(i, i + 10));
     const got = {};
@@ -2244,7 +2257,7 @@ function Attendance() {
     const worker = async () => {
       while (idx < chunks.length) {
         const c = chunks[idx++];
-        const { members } = await withAuth({ action: "members", year, month, windows: c });
+        const { members } = await withAuth({ action: "members", year: sy, month: sm, windows: c });
         Object.entries(members).forEach(([n, m]) => {
           const prev = got[n] || [];
           got[n] = prev.concat(m.filter((x) => !prev.some((p) => p.name === x.name && p.phone === x.phone)));
@@ -2255,16 +2268,17 @@ function Attendance() {
     };
     await Promise.all([worker(), worker(), worker()]);
     const names = [...new Set(list.map((w) => w.name))];
-    const data = names.map((n) => [n, got[n] || []]);
+    const data = names.map((n) => [n, got[n] || []]).filter(([, m]) => !(isApply && skipEmpty && !m.length));
+    if (!data.length) throw new Error("명단이 있는 강좌가 없어요.");
     setProg({ label: "엑셀 만드는 중", done: list.length, total: list.length });
     const holidays = holi.split(/[,\s]+/).map(Number).filter((n) => n >= 1 && n <= 31);
-    const r = await attCall({ action: "build", year, month, holidays, skipEmpty, data });
+    const r = await attCall(isApply ? { action: "apply_build", year, month, data } : { action: "build", year, month, holidays, skipEmpty, data });
     const bin = atob(r.zip);
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     const url = URL.createObjectURL(new Blob([bytes], { type: "application/zip" }));
     const a = document.createElement("a");
-    a.href = url; a.download = `출석부_${year}년${String(month).padStart(2, "0")}월.zip`; a.click();
+    a.href = url; a.download = `${isApply ? "신청서" : "출석부"}_${year}년${String(month).padStart(2, "0")}월.zip`; a.click();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
     const total = data.reduce((s, [, m]) => s + m.length, 0);
     setLog([`강좌 ${data.length}개 · 회원 ${total}명`, ...(r.log || [])]);
@@ -2275,7 +2289,7 @@ function Attendance() {
 
   return (
     <div>
-      <Panel title="출석부 생성 (바이비 명단 → 엑셀)">
+      <Panel title={isApply ? "신청서 생성 (전월 창구 명단 → 신청서 엑셀)" : "출석부 생성 (바이비 명단 → 엑셀)"}>
         {step === "login" && (
           <div className="grid sm:grid-cols-3 gap-2 items-end">
             <L label="바이비 아이디"><input className={attInput} value={user} onChange={(e) => setUser(e.target.value)} /></L>
@@ -2306,9 +2320,23 @@ function Attendance() {
                   {Array.from({ length: 12 }, (_, i) => <option key={i} value={i + 1}>{i + 1}월</option>)}
                 </select>
               </L>
-              <div className="col-span-2"><L label="공휴일 (쉬는 날, 쉼표로)"><input className={attInput} placeholder="예: 3, 9" value={holi} onChange={(e) => setHoli(e.target.value)} /></L></div>
+              {isApply
+                ? <div className="col-span-2 text-xs text-slate-500 self-center">명단 기준: <b>{new Date(year, month - 2, 1).getMonth() + 1}월 창구</b> (바이비 확정 순서대로)</div>
+                : <div className="col-span-2"><L label="공휴일 (쉬는 날, 쉼표로)"><input className={attInput} placeholder="예: 3, 9" value={holi} onChange={(e) => setHoli(e.target.value)} /></L></div>}
             </div>
-            <div className="flex flex-wrap gap-3 text-sm">
+            {isApply && (
+              <div className="flex flex-wrap gap-3 text-sm">
+                {APPLY_KEYWORDS.map((k) => (
+                  <label key={k} className="flex items-center gap-1.5">
+                    <input type="checkbox" checked={kws[k]} onChange={(e) => setKws({ ...kws, [k]: e.target.checked })} /> {k}
+                  </label>
+                ))}
+                <label className="flex items-center gap-1.5 text-slate-500">
+                  <input type="checkbox" checked={skipEmpty} onChange={(e) => setSkipEmpty(e.target.checked)} /> 0명 강좌 제외
+                </label>
+              </div>
+            )}
+            {!isApply && <div className="flex flex-wrap gap-3 text-sm">
               {ATT_KINDS.map((k) => (
                 <label key={k} className="flex items-center gap-1.5">
                   <input type="checkbox" checked={kinds[k]} onChange={(e) => setKinds({ ...kinds, [k]: e.target.checked })} /> {k}{k === "수영" ? " (강사별 파일)" : ""}
@@ -2317,9 +2345,9 @@ function Attendance() {
               <label className="flex items-center gap-1.5 text-slate-500">
                 <input type="checkbox" checked={skipEmpty} onChange={(e) => setSkipEmpty(e.target.checked)} /> 0명 강좌 제외
               </label>
-            </div>
+            </div>}
             <button className={btn} disabled={busy} onClick={doRun}>
-              {busy ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />} 출석부 생성
+              {busy ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />} {isApply ? "신청서 생성" : "출석부 생성"}
             </button>
           </div>
         )}

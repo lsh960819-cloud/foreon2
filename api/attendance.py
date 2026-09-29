@@ -188,10 +188,18 @@ def get_channels(auth):
         return FALLBACK_CHANNELS
 
 
-def list_windows(auth):
-    payload = {"channelIds": get_channels(auth), "deleted": False, "title": PRODUCT_KEYWORD,
+def list_windows(auth, keywords=None):
+    chans = get_channels(auth)
+    out, seen = [], set()
+    for kw in (keywords or [PRODUCT_KEYWORD]):
+        _list_windows_kw(auth, chans, kw, out, seen)
+    return out
+
+
+def _list_windows_kw(auth, chans, kw, out, seen):
+    payload = {"channelIds": chans, "deleted": False, "title": kw,
                "visible": None, "repeatSettings": ["MONTHLY_REPETITION", "NONE"]}
-    out, seen, pg = [], set(), 0
+    pg = 0
     while pg < 20:
         js = api(auth, "POST", f"/community/manager/v3/klass/windows?page={pg}&size=100", payload)
         its = items_of(js)
@@ -498,6 +506,131 @@ def build_zip(data, year, month, holidays, skip_empty=True):
     return buf.getvalue()
 
 
+# ───────────── 신청서 ─────────────
+APPLY_DIR = Path(__file__).resolve().parent / "_templates_apply"
+APPLY_KINDS = OrderedDict([("수영", "수영"), ("농구", "농구교실"), ("축구", "축구교실"), ("GX", "GX")])
+
+
+def apply_kind(name):
+    if "수영" in name or "아쿠아" in name:
+        return "수영"
+    if "농구" in name:
+        return "농구"
+    if "축구" in name:
+        return "축구"
+    return "GX"
+
+
+def is_apply_sheet(ws):
+    return "(" in ws.title and str(ws["B14"].value or "").strip() == "순번"
+
+
+def apply_slots(ws):
+    return [r for r in range(15, ws.max_row + 1) if str(ws.cell(r, 2).value or "").strip().isdigit()]
+
+
+def _hhmm(t):
+    """'06시30분' / '16시' → (6, 30)"""
+    m = re.search(r"(\d{1,2})시(?:(\d{1,2})분)?", t or "")
+    return (int(m.group(1)), int(m.group(2) or 0)) if m else None
+
+
+def retime_sheet(ws, src_title, new_title):
+    """복사한 시트의 강사·요일·시간 문구를 새 강좌에 맞게 바꿈"""
+    _, sday, sins = parse_class(src_title)
+    _, nday, nins = parse_class(new_title)
+    stime = re.search(r"\d{1,2}시(?:\d{1,2}분)?", src_title.split("(")[-1])
+    ntime = re.search(r"\d{1,2}시(?:\d{1,2}분)?", new_title.split("(")[-1])
+    for row in ws.iter_rows(min_row=4, max_row=13):
+        for c in row:
+            v = c.value
+            if not isinstance(v, str) or v.startswith("="):
+                continue
+            if "강사" in v and sins and nins:
+                v = v.replace(sins, nins)
+            if "요일" in v and nday:
+                v = re.sub(r"요일:\s*[^/]*/", f"요일: {' , '.join(nday)} /", v)
+            if "시간" in v and stime and ntime:
+                v = v.replace(stime.group(0), ntime.group(0))
+            if "매주" in v and sday and nday and sday != nday:
+                v = v.replace(",".join(sday), ",".join(nday)).replace(f"주{len(sday)}회", f"주{len(nday)}회")
+            c.value = v
+    # 시간 칸 (예: 16:00 ~ 17:00) : 원본 수업 길이 유지
+    a = ws["A15"].value
+    st, nt = _hhmm(stime.group(0) if stime else ""), _hhmm(ntime.group(0) if ntime else "")
+    if isinstance(a, str) and st and nt:
+        tm = re.findall(r"(\d{1,2}):(\d{2})", a)
+        if len(tm) >= 2:
+            dur = (int(tm[1][0]) * 60 + int(tm[1][1])) - (int(tm[0][0]) * 60 + int(tm[0][1]))
+            s0 = nt[0] * 60 + nt[1]
+            e0 = s0 + dur
+            ws["A15"].value = a.replace(f"{tm[0][0]}:{tm[0][1]}", f"{s0 // 60:02d}:{s0 % 60:02d}", 1) \
+                               .replace(f"{tm[1][0]}:{tm[1][1]}", f"{e0 // 60:02d}:{e0 % 60:02d}", 1)
+
+
+def fill_apply(ws, members):
+    rows = apply_slots(ws)
+    for r in rows:
+        for col in range(3, 11):   # 날짜~비고 비우기
+            ws.cell(r, col).value = None
+    for r, m in zip(rows, members):
+        ws.cell(r, 4).value = m["name"]
+        ws.cell(r, 5).value = int(m["dong"]) if str(m["dong"]).isdigit() else m["dong"]
+        ws.cell(r, 6).value = int(m["ho"]) if str(m["ho"]).isdigit() else m["ho"]
+    if len(members) > len(rows):
+        print(f"  ! {ws.title}: {len(members)}명 > 칸 {len(rows)}개 (초과분 누락)")
+
+
+def build_apply_workbook(tpl, classes, data, month, out_path):
+    wb = load_workbook(tpl)
+    existing = {ws.title: ws for ws in wb.worksheets if is_apply_sheet(ws)}
+    samples = list(existing.values())
+    made = []
+    for cname in classes:
+        title = cname[:31]
+        if title in existing:
+            ws = existing[title]
+        else:
+            base, day, _ = parse_class(cname)
+            src = next((s for s in samples if parse_class(s.title)[0] == base and parse_class(s.title)[1] == day), None) \
+                or next((s for s in samples if parse_class(s.title)[0] == base), None) \
+                or next((s for s in samples if parse_class(s.title)[1] == day), samples[0])
+            ws = clone_sheet(wb, src, title)
+            retime_sheet(ws, src.title, cname)
+            print(f"  + 새 시트: {title}  (복사 원본: {src.title})")
+        fill_apply(ws, data[cname])
+        made.append(ws)
+    for ws in list(wb.worksheets):
+        if ws not in made and ws.title != "월":
+            wb.remove(ws)
+    if "월" in wb.sheetnames:
+        wb["월"]["A1"].value = month
+        wb["월"].sheet_state = "visible"
+    wb._sheets = made + [ws for ws in wb._sheets if ws not in made]
+    wb.active = 0
+    for ws in wb.worksheets:
+        ws.sheet_view.tabSelected = ws is made[0]
+    wb.calculation.fullCalcOnLoad = True
+    wb.save(out_path)
+    print(f"  저장: {out_path.name} (강좌 {len(made)}개)")
+
+
+def build_apply_zip(data, year, month):
+    tpls = {k: APPLY_DIR / f"{v}.xlsx" for k, v in APPLY_KINDS.items()}
+    assign = OrderedDict((k, []) for k in tpls)
+    for cname in data:
+        assign[apply_kind(cname)].append(cname)
+    buf = io.BytesIO()
+    with tempfile.TemporaryDirectory() as td, zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for k, classes in assign.items():
+            if not classes:
+                continue
+            fname = f"{year}년 {month}월 {APPLY_KINDS[k]} 신청서.xlsx"
+            build_apply_workbook(tpls[k], classes, data, month, Path(td) / fname)
+            z.write(Path(td) / fname, fname)
+    return buf.getvalue()
+
+
 # ───────────── HTTP 핸들러 ─────────────
 def make_auth(tok, user):
     a, kind = pick_auth(tok)
@@ -555,6 +688,11 @@ def handle(b):
             raise BybError(f"토큰 발급 실패 ({st}, {how}): {txt[:200]}")
         return {"auth": make_auth(js, pend["u"])}
 
+    if act == "apply_build":
+        LOG.clear()
+        z = build_apply_zip(OrderedDict(b["data"]), int(b["year"]), int(b["month"]))
+        return {"zip": base64.b64encode(z).decode(), "log": LOG[-200:]}
+
     if act == "build":
         LOG.clear()
         data = OrderedDict(b["data"])
@@ -565,7 +703,7 @@ def handle(b):
     auth = decode_auth(b.get("auth", ""))
 
     if act == "windows":
-        return {"windows": list_windows(auth)}
+        return {"windows": list_windows(auth, b.get("keywords"))}
 
     if act == "members":
         y, m = int(b["year"]), int(b["month"])
