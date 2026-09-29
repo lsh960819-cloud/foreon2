@@ -217,7 +217,9 @@ def _list_windows_kw(auth, chans, kw, out, seen):
             title = find_title(it)
             if wid and title and wid not in seen:
                 seen.add(wid)
-                out.append({"id": wid, "name": class_name_from_row(title) or title})
+                out.append({"id": wid, "name": class_name_from_row(title) or title,
+                            "price": it.get("price"), "visible": it.get("visible"),
+                            "apps": it.get("monthlyRepetitionNumberOfApplicants") or {}})
         if len(its) < 100:
             break
         pg += 1
@@ -817,6 +819,54 @@ def handle(b):
         api(auth, "DELETE", f"/community/manager/v1/reservations/{rid}",
             {"reason": (b.get("reason") or "관리사무소 요청")[:100], "refundAmount": amount})
         return {"ok": True, "paid": paid, "title": title}
+
+    if act == "household":   # 동·호수 → 등록 가능한 회원 목록 (바이비 [예약자 추가] 화면과 같은 조회)
+        dong, ho = re.sub(r"\D", "", str(b["dong"])), re.sub(r"\D", "", str(b["ho"]))
+        if not dong or not ho:
+            raise BybError("동·호수를 숫자로 입력해 주세요.")
+        js = api(auth, "GET", f"/authmanage/manager/rauth?dong={dong}&ho={ho}&page=0&size=1000") or {}
+        rows = [r for r in js.get("content", []) if r.get("blueId") and (r.get("rauthState") or r.get("state")) == "CREATED"]
+        names = {}
+        ids = [r["blueId"] for r in rows]
+        for i in range(0, len(ids), 50):
+            for u in api(auth, "POST", "/membermanage/manager/member/blueIdList", {"userList": ids[i:i + 50]}) or []:
+                if isinstance(u, dict):
+                    names[u.get("blueId")] = u
+        out = []
+        for r in rows:
+            u = names.get(r["blueId"], {})
+            nm = u.get("name")
+            if not nm:
+                continue
+            ph = re.sub(r"\D", "", u.get("phone_number") or "")
+            out.append({"rauthId": r["rauthId"], "uid": r["blueId"], "name": nm,
+                        "birth": (u.get("birthdate") or "")[:4], "phone4": ph[-4:]})
+        return {"people": out}
+
+    if act == "register":   # 수강 등록 (+차감) — 바이비 [예약 생성]과 같은 요청
+        wid, rauth = str(b["windowId"]), str(b["rauthId"])
+        month = str(b["month"])
+        if not re.fullmatch(r"[0-9a-f\-]{36}", wid) or not re.fullmatch(r"[0-9a-f\-]{36}", rauth) \
+                or not re.fullmatch(r"\d{4}-\d{2}", month):
+            raise BybError("등록 정보가 올바르지 않아요.")
+        deduct = int(b.get("deduct") or 0)
+        w = api(auth, "GET", f"/community/manager/v2/windows/{wid}") or {}
+        title = (w.get("title") or "").replace("/", "")
+        if b.get("course") and b["course"].replace("/", "") != title:
+            raise BybError(f"강좌가 달라요: 선택={b['course']} / 창구={title}")
+        price = int(b.get("price") or 0)
+        if deduct < 0 or (price and deduct > price):
+            raise BybError(f"차감액 {deduct:,}원이 강습료 {price:,}원 범위를 벗어났어요.")
+        y, m = map(int, month.split("-"))
+        for mb in members_of(auth, wid, y, m, None, True):   # 중복 등록 방지
+            if mb.get("uid") == b.get("uid"):
+                raise BybError(f"{mb['name']} 님은 이미 {m}월 이 강좌에 등록돼 있어요.")
+        body = {"windowId": wid, "customerRauthId": rauth, "reservationMonth": month}
+        if deduct:
+            body = {"windowId": wid, "customerRauthId": rauth,
+                    "arbitraryCharge": {"description": "차감 금액", "amount": -deduct}, "reservationMonth": month}
+        js = api(auth, "POST", "/community/manager/v1/klass/reservations", body) or {}
+        return {"ok": True, "reservationId": js.get("reservationId"), "title": title}
 
     if act == "members":
         y, m = int(b["year"]), int(b["month"])

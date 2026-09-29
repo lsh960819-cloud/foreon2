@@ -2006,7 +2006,22 @@ function ReservationForm({ me, kind, options, seatLabel, seatPh }) {
           </Fld>
         </div>
 
-        <DongHoName action="등록" dong={dong} setDong={setDong} ho={ho} setHo={setHo} name={name} setName={setName} />
+        <div className="space-y-2">
+          <div className="flex gap-2 items-end">
+            <L label="동"><input className={attInput} inputMode="numeric" value={dong} onChange={(e) => { setDong(e.target.value); setPeople(null); setPerson(null); }} /></L>
+            <L label="호수"><input className={attInput} inputMode="numeric" value={ho} onChange={(e) => { setHo(e.target.value); setPeople(null); setPerson(null); }}
+              onKeyDown={(e) => e.key === "Enter" && dong && ho && findPeople()} /></L>
+            <button onClick={findPeople} disabled={!dong || !ho || !!busy} className="rounded-lg border border-emerald-600 text-emerald-700 text-sm px-3 py-2 whitespace-nowrap disabled:opacity-40">회원 찾기</button>
+          </div>
+          {people && (!people.length ? <p className="text-xs text-slate-400">{dong}동 {ho}호에 등록된 회원이 없어요.</p> :
+            <div className="border border-slate-200 rounded-lg divide-y divide-slate-100 max-h-48 overflow-y-auto">
+              {people.map((pp) => (
+                <button key={pp.rauthId} onClick={() => setPerson(pp)} className={`w-full text-left px-3 py-2 text-sm ${person === pp ? "bg-emerald-50 text-emerald-800 font-medium" : "hover:bg-slate-50"}`}>
+                  {pp.name} <span className="text-xs text-slate-400">{pp.birth ? pp.birth + "년생" : ""} {pp.phone4 ? "· ****" + pp.phone4 : ""}</span>
+                </button>
+              ))}
+            </div>)}
+        </div>
 
         {action === "취소" && (
           <div className="grid grid-cols-2 gap-2">
@@ -2437,6 +2452,8 @@ function LessonPanel({ call }) {
   const [priceStr, setPriceStr] = useState("");
   const [manual, setManual] = useState("");
   const [busy, setBusy] = useState(""); const [err, setErr] = useState("");
+  const [winId, setWinId] = useState("");
+  const [people, setPeople] = useState(null); const [person, setPerson] = useState(null);
   const [confirm, setConfirm] = useState(false); const [reason, setReason] = useState(""); const [doneMsg, setDoneMsg] = useState("");
 
   const doCancel = async () => {
@@ -2454,8 +2471,8 @@ function LessonPanel({ call }) {
     try {
       const { windows } = await call({ action: "windows", keywords: BYB_LCATS[cat] });
       const map = new Map();
-      windows.forEach((w) => { if (!map.has(w.name)) map.set(w.name, []); map.get(w.name).push(w.id); });
-      setList([...map].map(([n, ids]) => ({ name: n, ids })).sort((a, b) => a.name.localeCompare(b.name, "ko")));
+      windows.forEach((w) => { if (!map.has(w.name)) map.set(w.name, []); map.get(w.name).push(w); });
+      setList([...map].map(([n, ws]) => ({ name: n, ids: ws.map((w) => w.id), ws })).sort((a, b) => a.name.localeCompare(b.name, "ko")));
     } catch (e) { setErr(e.message); } finally { setBusy(""); }
   };
   React.useEffect(() => { loadCourses(); }, [cat]);  // eslint-disable-line
@@ -2472,8 +2489,29 @@ function LessonPanel({ call }) {
   };
   React.useEffect(() => { if (course && action === "취소") loadMembers(); }, [course, action, ym.y, ym.m]);  // eslint-disable-line
 
-  const info = course ? lessonInfo(course) : null;
+  const item = list.find((x) => x.name === course);
+  const off = (ym.y - now.getFullYear()) * 12 + ym.m - (now.getMonth() + 1);
+  const appKey = off < 0 ? "prevMonth" : off === 0 ? "thisMonth" : "nextMonth";
+  const autoWin = item ? [...item.ws].sort((a, b) => ((b.apps || {})[appKey] || 0) - ((a.apps || {})[appKey] || 0) || (b.visible ? 1 : 0) - (a.visible ? 1 : 0))[0] : null;
+  const win = item ? (item.ws.find((w) => w.id === winId) || autoWin) : null;
+  const info0 = course ? lessonInfo(course) : null;
+  const info = info0 && win && win.price ? { ...info0, price: win.price } : info0;
   const price = Number(priceStr.replace(/[^\d]/g, "")) || (info ? info.price : 0);
+
+  const findPeople = async () => {
+    setBusy("회원 찾는 중"); setErr(""); setPeople(null); setPerson(null);
+    try { const { people: r } = await call({ action: "household", dong, ho }); setPeople(r); if (r.length === 1) setPerson(r[0]); }
+    catch (e) { setErr(e.message); } finally { setBusy(""); }
+  };
+  const doRegister = async () => {
+    setBusy("바이비에 등록 중"); setErr(""); setDoneMsg("");
+    try {
+      await call({ action: "register", windowId: win.id, rauthId: person.rauthId, uid: person.uid, course,
+        month: `${ym.y}-${String(ym.m).padStart(2, "0")}`, deduct: amount, price });
+      setDoneMsg(`${person.name} (${dong}동 ${ho}호) ${ym.m}월 등록 완료 · 차감 ${amount.toLocaleString()}원`);
+      setConfirm(false); setPerson(null); setPeople(null); setManual("");
+    } catch (e) { setErr(e.message); } finally { setBusy(""); }
+  };
   const when = new Date(whenStr);
   const regAt = pick && pick.at ? new Date(pick.at) : null;
   const calc = info ? lessonCalc({ info, y: ym.y, m: ym.m, holi, action, when, regAt, price }) : null;
@@ -2500,11 +2538,18 @@ function LessonPanel({ call }) {
         </div>
       </div>
       <L label={`강좌 (${list.length}개)`}>
-        <select className={attInput} value={course} onChange={(e) => { setCourse(e.target.value); setManual(""); setPriceStr(""); }}>
+        <select className={attInput} value={course} onChange={(e) => { setCourse(e.target.value); setManual(""); setPriceStr(""); setWinId(""); setConfirm(false); }}>
           <option value="">— 강좌 선택 —</option>
           {list.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
         </select>
       </L>
+      {item && item.ws.length > 1 && (
+        <L label="같은 이름 창구가 여러 개예요 — 사용할 창구">
+          <select className={attInput} value={win ? win.id : ""} onChange={(e) => setWinId(e.target.value)}>
+            {item.ws.map((w, i) => <option key={w.id} value={w.id}>#{i + 1} {w.visible ? "공개" : "비공개"} · {(w.price || 0).toLocaleString()}원 · 지난달 {w.apps?.prevMonth ?? "-"} / 이번달 {w.apps?.thisMonth ?? "-"} / 다음달 {w.apps?.nextMonth ?? "-"}명{w.id === autoWin?.id ? " (자동 선택)" : ""}</option>)}
+          </select>
+        </L>
+      )}
       <div>
         <p className="text-xs text-slate-500 mb-1">공휴일·휴강일 체크 ({ym.m}월) — <span className="text-emerald-700">초록 = 이 강좌 수업일</span></p>
         <div className="grid grid-cols-7 gap-1 max-w-sm text-center text-xs">
@@ -2520,9 +2565,24 @@ function LessonPanel({ call }) {
         </div>
         <p className="text-[11px] text-slate-400 mt-1">쉬는 날을 눌러 빨간색으로 표시하세요. 다시 누르면 해제됩니다.</p>
       </div>
-      <ActionToggle action={action} setAction={(a) => { setAction(a); setPick(null); setManual(""); }} />
+      <ActionToggle action={action} setAction={(a) => { setAction(a); setPick(null); setManual(""); setConfirm(false); }} />
       {action === "등록" ? (
-        <DongHoName action="등록" dong={dong} setDong={setDong} ho={ho} setHo={setHo} name={name} setName={setName} />
+        <div className="space-y-2">
+          <div className="flex gap-2 items-end">
+            <L label="동"><input className={attInput} inputMode="numeric" value={dong} onChange={(e) => { setDong(e.target.value); setPeople(null); setPerson(null); }} /></L>
+            <L label="호수"><input className={attInput} inputMode="numeric" value={ho} onChange={(e) => { setHo(e.target.value); setPeople(null); setPerson(null); }}
+              onKeyDown={(e) => e.key === "Enter" && dong && ho && findPeople()} /></L>
+            <button onClick={findPeople} disabled={!dong || !ho || !!busy} className="rounded-lg border border-emerald-600 text-emerald-700 text-sm px-3 py-2 whitespace-nowrap disabled:opacity-40">회원 찾기</button>
+          </div>
+          {people && (!people.length ? <p className="text-xs text-slate-400">{dong}동 {ho}호에 등록된 회원이 없어요.</p> :
+            <div className="border border-slate-200 rounded-lg divide-y divide-slate-100 max-h-48 overflow-y-auto">
+              {people.map((pp) => (
+                <button key={pp.rauthId} onClick={() => setPerson(pp)} className={`w-full text-left px-3 py-2 text-sm ${person === pp ? "bg-emerald-50 text-emerald-800 font-medium" : "hover:bg-slate-50"}`}>
+                  {pp.name} <span className="text-xs text-slate-400">{pp.birth ? pp.birth + "년생" : ""} {pp.phone4 ? "· ****" + pp.phone4 : ""}</span>
+                </button>
+              ))}
+            </div>)}
+        </div>
       ) : (
         <div>
           <p className="text-xs text-slate-500 mb-1">취소할 수강생 ({ym.m}월 확정 명단)</p>
@@ -2570,9 +2630,20 @@ function LessonPanel({ call }) {
           </button>
         )
       ) : (
-        <button disabled className="w-full rounded-lg bg-slate-300 text-white text-sm font-medium py-2.5">
-          바이비 등록 실행 (준비 중 — 지금은 금액 확인용)
-        </button>
+        confirm ? (
+          <div className="rounded-xl border-2 border-emerald-300 bg-emerald-50 p-3 space-y-2">
+            <p className="text-sm text-emerald-900"><b>{person.name}</b> ({dong}동 {ho}호)<br />{course}<br />{ym.y}년 {ym.m}월 등록 · 강습료 {price.toLocaleString()}원 · <b>차감 {amount.toLocaleString()}원</b> (부과 {(price - amount).toLocaleString()}원)</p>
+            <div className="flex gap-2">
+              <button onClick={doRegister} disabled={!!busy} className="flex-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium py-2">네, 바이비에 등록</button>
+              <button onClick={() => setConfirm(false)} className="flex-1 rounded-lg border border-slate-300 text-slate-600 text-sm py-2">돌아가기</button>
+            </div>
+          </div>
+        ) : (
+          <button disabled={!person || !win || !!busy || amount > price} onClick={() => setConfirm(true)}
+            className="w-full rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white text-sm font-medium py-2.5">
+            바이비에 등록 실행
+          </button>
+        )
       )}
       {doneMsg && <p className="text-sm text-emerald-700">✔ {doneMsg}</p>}
       {busy && <p className="text-xs text-slate-500 flex items-center gap-1"><Loader2 size={13} className="animate-spin" /> {busy}</p>}
