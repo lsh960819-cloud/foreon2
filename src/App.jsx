@@ -370,6 +370,7 @@ export default function App() {
     { id: "files", label: "자료실", icon: FolderOpen },
     { id: "attendance", label: "출석부 생성", icon: CalendarCheck },
     { id: "apply", label: "신청서 생성", icon: FileText },
+    { id: "lessonbyb", label: "강습 등록·취소", icon: GraduationCap },
     ...(isOffice ? [{ id: "officelog", label: "사무실 업무일지", icon: ClipboardList }] : []),
     { id: "link", label: "외부 연동", icon: ArrowLeftRight },
   ];
@@ -414,6 +415,7 @@ export default function App() {
         {tab === "files" && <SharedFiles me={me} />}
         {tab === "attendance" && <Attendance key="att" />}
         {tab === "apply" && <Attendance key="apply" mode="apply" />}
+        {tab === "lessonbyb" && <Attendance key="lesson" mode="lesson" />}
         {tab === "officelog" && isOffice && <OfficeLog me={me} />}
         {tab === "link" && <LinkInfo />}
       </div>
@@ -2289,7 +2291,7 @@ function Attendance({ mode = "attendance" }) {
 
   return (
     <div>
-      <Panel title={isApply ? "신청서 생성 (전월 창구 명단 → 신청서 엑셀)" : "출석부 생성 (바이비 명단 → 엑셀)"}>
+      <Panel title={mode === "lesson" ? "강습 등록·취소 (바이비)" : isApply ? "신청서 생성 (전월 창구 명단 → 신청서 엑셀)" : "출석부 생성 (바이비 명단 → 엑셀)"}>
         {step === "login" && (
           <div className="grid sm:grid-cols-3 gap-2 items-end">
             <L label="바이비 아이디"><input className={attInput} value={user} onChange={(e) => setUser(e.target.value)} /></L>
@@ -2310,7 +2312,13 @@ function Attendance({ mode = "attendance" }) {
             <button className="text-sm text-slate-500 underline" onClick={() => { setStep("login"); setPending(null); }}>처음부터</button>
           </div>
         )}
-        {step === "ready" && (
+        {step === "ready" && mode === "lesson" && (
+          <>
+            <p className="text-xs text-emerald-700 flex items-center gap-1 mb-3"><CheckCircle2 size={14} /> 바이비 로그인됨 ({user})</p>
+            <LessonPanel call={async (body) => { const j = await attCall({ ...body, auth: BYB_AUTH }); if (j.auth) setAuth(j.auth); return j; }} />
+          </>
+        )}
+        {step === "ready" && mode !== "lesson" && (
           <div className="space-y-3">
             <p className="text-xs text-emerald-700 flex items-center gap-1"><CheckCircle2 size={14} /> 바이비 로그인됨 ({user}) — 이 창을 닫으면 로그인 정보는 사라져요.</p>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -2364,6 +2372,181 @@ function Attendance({ mode = "attendance" }) {
           <pre className="text-xs text-slate-600 whitespace-pre-wrap max-h-72 overflow-auto">{log.join("\n")}</pre>
         </Panel>
       )}
+    </div>
+  );
+}
+
+/* ─────────────────────── 강습 등록·취소 (바이비 직접) — 금액 계산은 PC 자동화(v3)와 동일 */
+const BYB_LCATS = {
+  GX: ["2단지 요가", "2단지 줌바", "2단지 매트", "2단지 근력", "2단지 방송", "2단지 타바타"],
+  농구: ["농구"], 축구: ["축구"], 수영: ["수영"], 아쿠아: ["아쿠아"],
+};
+const WD = { 일: 0, 월: 1, 화: 2, 수: 3, 목: 4, 금: 5, 토: 6 };
+function lessonInfo(name) {
+  const inner = (name.split("(").pop() || "");
+  const d = inner.match(/([월화수목금토일]+)(\d{1,2})시(?:(\d{1,2})분)?/);
+  const days = d ? [...d[1]] : [];
+  const hh = d ? +d[2] : 0, mm = d && d[3] ? +d[3] : 0;
+  const ball = /축구|농구/.test(name);
+  const weekendOnly = days.length > 0 && days.every((x) => x === "토" || x === "일");
+  const total = ball || weekendOnly ? 4 : 8;
+  const price = ball ? 100000 : weekendOnly ? 30000 : 50000;
+  return { days, hh, mm, total, price };
+}
+// 이번 달 수업일 (체크한 공휴일 제외, 기준 횟수까지만)
+function classDays(info, y, m, holi) {
+  const out = [];
+  const last = new Date(y, m, 0).getDate();
+  for (let d = 1; d <= last; d++) {
+    if (holi.includes(d)) continue;
+    const wd = new Date(y, m - 1, d).getDay();
+    if (info.days.some((x) => WD[x] === wd)) out.push(d);
+  }
+  return out.slice(0, info.total);
+}
+function lessonCalc({ info, y, m, holi, action, when, regAt, price }) {
+  const days = classDays(info, y, m, holi);
+  const unit = price / info.total;
+  const at = (d) => new Date(y, m - 1, d, info.hh, info.mm);
+  if (action === "등록") {
+    const missed = days.filter((d) => at(d) <= when).length;       // 이미 지난 수업
+    const attendable = Math.max(days.length - missed, 0);
+    const applied = Math.round(unit * Math.min(attendable, info.total));
+    return { days, unit, count: attendable, amount: Math.min(Math.max(price - applied, 0), price),
+      text: `참석 가능 ${attendable}회 × ${Math.round(unit).toLocaleString()}원 = 적용 ${applied.toLocaleString()}원 → 차감` };
+  }
+  if (price === 150000) return { days, unit, count: 0, amount: price, text: "특강(150,000원반) → 전액 환불" };
+  const attended = days.filter((d) => at(d) <= when && (!regAt || at(d) > regAt)).length;  // 이미 들은 수업
+  const refund = Math.max(Math.round(price - unit * Math.min(attended, info.total)), 0);
+  return { days, unit, count: attended, amount: refund,
+    text: `수강 ${attended}회 × ${Math.round(unit).toLocaleString()}원 사용 → 환불` };
+}
+
+function LessonPanel({ call }) {
+  const now = new Date();
+  const [cat, setCat] = useState("GX");
+  const [ym, setYm] = useState({ y: now.getFullYear(), m: now.getMonth() + 1 });
+  const [holi, setHoli] = useState([]);
+  const [list, setList] = useState([]);        // [{name, ids:[]}]
+  const [course, setCourse] = useState("");
+  const [action, setAction] = useState("등록");
+  const [members, setMembers] = useState(null);
+  const [pick, setPick] = useState(null);      // 취소 대상
+  const [dong, setDong] = useState(""); const [ho, setHo] = useState(""); const [name, setName] = useState("");
+  const [whenStr, setWhenStr] = useState(() => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); });
+  const [priceStr, setPriceStr] = useState("");
+  const [manual, setManual] = useState("");
+  const [busy, setBusy] = useState(""); const [err, setErr] = useState("");
+
+  const loadCourses = async () => {
+    setBusy("강좌 불러오는 중"); setErr(""); setCourse(""); setMembers(null); setPick(null);
+    try {
+      const { windows } = await call({ action: "windows", keywords: BYB_LCATS[cat] });
+      const map = new Map();
+      windows.forEach((w) => { if (!map.has(w.name)) map.set(w.name, []); map.get(w.name).push(w.id); });
+      setList([...map].map(([n, ids]) => ({ name: n, ids })).sort((a, b) => a.name.localeCompare(b.name, "ko")));
+    } catch (e) { setErr(e.message); } finally { setBusy(""); }
+  };
+  React.useEffect(() => { loadCourses(); }, [cat]);  // eslint-disable-line
+
+  const loadMembers = async (c = course) => {
+    const item = list.find((x) => x.name === c);
+    if (!item) return;
+    setBusy("수강생 불러오는 중"); setErr(""); setPick(null);
+    try {
+      const { members: r } = await call({ action: "members", meta: true, year: ym.y, month: ym.m,
+        windows: item.ids.map((id) => ({ id, name: c })) });
+      setMembers(r[c] || []);
+    } catch (e) { setErr(e.message); } finally { setBusy(""); }
+  };
+  React.useEffect(() => { if (course && action === "취소") loadMembers(); }, [course, action, ym.y, ym.m]);  // eslint-disable-line
+
+  const info = course ? lessonInfo(course) : null;
+  const price = Number(priceStr.replace(/[^\d]/g, "")) || (info ? info.price : 0);
+  const when = new Date(whenStr);
+  const regAt = pick && pick.at ? new Date(pick.at) : null;
+  const calc = info ? lessonCalc({ info, y: ym.y, m: ym.m, holi, action, when, regAt, price }) : null;
+  const amount = manual.trim() ? Number(manual.replace(/[^\d]/g, "")) : calc ? calc.amount : 0;
+
+  const last = new Date(ym.y, ym.m, 0).getDate();
+  const first = new Date(ym.y, ym.m - 1, 1).getDay();
+  const cls = info ? new Set(classDays(info, ym.y, ym.m, [])) : new Set();
+  const months = [-1, 0, 1, 2].map((k) => { const d = new Date(now.getFullYear(), now.getMonth() + k, 1); return { y: d.getFullYear(), m: d.getMonth() + 1 }; });
+  const chip = (on) => `px-3 py-1.5 rounded-lg text-sm border ${on ? "bg-emerald-600 border-emerald-600 text-white" : "bg-white border-slate-200 text-slate-600"}`;
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <p className="text-xs text-slate-500 mb-1">종목</p>
+        <div className="flex flex-wrap gap-1.5">
+          {Object.keys(BYB_LCATS).map((k) => <button key={k} className={chip(cat === k)} onClick={() => setCat(k)}>{k === "GX" ? "GX (요가·줌바·매트·근력·방송·타바타)" : k}</button>)}
+        </div>
+      </div>
+      <div>
+        <p className="text-xs text-slate-500 mb-1">작업할 창구 (월)</p>
+        <div className="flex flex-wrap gap-1.5">
+          {months.map((o) => <button key={o.y * 100 + o.m} className={chip(ym.y === o.y && ym.m === o.m)} onClick={() => { setYm(o); setHoli([]); }}>{o.y}년 {o.m}월</button>)}
+        </div>
+      </div>
+      <L label={`강좌 (${list.length}개)`}>
+        <select className={attInput} value={course} onChange={(e) => { setCourse(e.target.value); setManual(""); setPriceStr(""); }}>
+          <option value="">— 강좌 선택 —</option>
+          {list.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
+        </select>
+      </L>
+      <div>
+        <p className="text-xs text-slate-500 mb-1">공휴일·휴강일 체크 ({ym.m}월) — <span className="text-emerald-700">초록 = 이 강좌 수업일</span></p>
+        <div className="grid grid-cols-7 gap-1 max-w-sm text-center text-xs">
+          {"일월화수목금토".split("").map((d) => <div key={d} className="text-slate-400">{d}</div>)}
+          {Array.from({ length: first }, (_, i) => <div key={"b" + i} />)}
+          {Array.from({ length: last }, (_, i) => i + 1).map((d) => {
+            const off = holi.includes(d);
+            return (
+              <button key={d} onClick={() => setHoli(off ? holi.filter((x) => x !== d) : [...holi, d])}
+                className={`py-1.5 rounded border ${off ? "bg-rose-500 border-rose-500 text-white line-through" : cls.has(d) ? "bg-emerald-50 border-emerald-300 text-emerald-800 font-semibold" : "border-slate-200 text-slate-500"}`}>{d}</button>
+            );
+          })}
+        </div>
+        <p className="text-[11px] text-slate-400 mt-1">쉬는 날을 눌러 빨간색으로 표시하세요. 다시 누르면 해제됩니다.</p>
+      </div>
+      <ActionToggle action={action} setAction={(a) => { setAction(a); setPick(null); setManual(""); }} />
+      {action === "등록" ? (
+        <DongHoName action="등록" dong={dong} setDong={setDong} ho={ho} setHo={setHo} name={name} setName={setName} />
+      ) : (
+        <div>
+          <p className="text-xs text-slate-500 mb-1">취소할 수강생 ({ym.m}월 확정 명단)</p>
+          {!course ? <p className="text-xs text-slate-400">강좌를 먼저 고르세요.</p>
+            : members == null ? <p className="text-xs text-slate-400">불러오는 중…</p>
+            : !members.length ? <p className="text-xs text-slate-400">{ym.m}월 확정 수강생이 없어요.</p>
+            : <div className="border border-slate-200 rounded-lg max-h-60 overflow-y-auto divide-y divide-slate-100">
+                {members.map((mb, i) => (
+                  <button key={i} onClick={() => setPick(mb)}
+                    className={`w-full text-left px-3 py-2 text-sm ${pick === mb ? "bg-rose-50 text-rose-800 font-medium" : "hover:bg-slate-50"}`}>
+                    {mb.name} <span className="text-xs text-slate-400">{mb.dong}동 {mb.ho}호 · {mb.at ? mb.at.slice(0, 16).replace("T", " ") + " 등록" : ""}</span>
+                  </button>
+                ))}
+              </div>}
+        </div>
+      )}
+      {info && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          <L label="처리 기준 일시"><input type="datetime-local" className={attInput} value={whenStr} onChange={(e) => setWhenStr(e.target.value)} /></L>
+          <L label={`강습료 (기본 ${info.price.toLocaleString()}원)`}><input className={attInput} placeholder={String(info.price)} value={priceStr} onChange={(e) => setPriceStr(e.target.value)} /></L>
+          <L label={`수동 ${action === "등록" ? "차감" : "환불"}액 (선택)`}><input className={attInput} placeholder="비우면 자동 계산" value={manual} onChange={(e) => setManual(e.target.value)} /></L>
+        </div>
+      )}
+      {calc && (
+        <div className={`rounded-xl border p-3 text-sm ${action === "등록" ? "bg-emerald-50 border-emerald-200" : "bg-rose-50 border-rose-200"}`}>
+          <p className="text-xs text-slate-600">{ym.m}월 수업일 {calc.days.length}회 (기준 {info.total}회): {calc.days.map((d) => `${ym.m}/${d}`).join(", ") || "없음"}</p>
+          <p className="text-xs text-slate-600 mt-0.5">{calc.text}</p>
+          <p className="text-lg font-bold mt-1">{action === "등록" ? "차감" : "환불"} {amount.toLocaleString()}원{manual.trim() ? " (수동)" : ""}</p>
+        </div>
+      )}
+      <button disabled className="w-full rounded-lg bg-slate-300 text-white text-sm font-medium py-2.5" title="바이비 등록·환불 요청 형식 확인 후 연결 예정">
+        바이비에 {action} 실행 (준비 중 — 금액 확인용)
+      </button>
+      {busy && <p className="text-xs text-slate-500 flex items-center gap-1"><Loader2 size={13} className="animate-spin" /> {busy}</p>}
+      {err && <p className="text-sm text-red-600 break-all">⚠ {err}</p>}
     </div>
   );
 }

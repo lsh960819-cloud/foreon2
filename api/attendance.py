@@ -215,9 +215,9 @@ def _list_windows_kw(auth, chans, kw, out, seen):
     return out
 
 
-def members_of(auth, wid, year, month, me):
+def members_of(auth, wid, year, month, me, with_meta=False):
     last = calendar.monthrange(year, month)[1]
-    ids, pg = [], 0
+    ids, pg, meta = [], 0, {}
     while pg < 20:
         q = urllib.parse.urlencode({
             "page": pg, "size": 100, "scenarioType": "KLASS", "latestRevision.status": "CONFIRMED",
@@ -229,6 +229,7 @@ def members_of(auth, wid, year, month, me):
             uid = find_key(it, ID_KEYS)
             if uid and uid != me and uid not in ids:
                 ids.append(uid)
+                meta[uid] = {"rid": it.get("id"), "at": it.get("createdAt") or ""}
         if len(its) < 100:
             break
         pg += 1
@@ -236,7 +237,12 @@ def members_of(auth, wid, year, month, me):
     for i in range(0, len(ids), 50):
         js = api(auth, "POST", "/membermanage/manager/member/blueIdList", {"userList": ids[i:i + 50]})
         got = {u.get("blueId"): u for u in (js or []) if isinstance(u, dict)}
-        mem += api_to_members([got[x] for x in ids[i:i + 50] if x in got])
+        for x in ids[i:i + 50]:
+            if x in got:
+                m = api_to_members([got[x]])[0]
+                if with_meta:
+                    m.update(meta.get(x, {}), uid=x)
+                mem.append(m)
     return mem
 
 
@@ -787,7 +793,8 @@ def handle(b):
         y, m = int(b["year"]), int(b["month"])
         res = {}
         for w in b["windows"][:15]:
-            res[w["name"]] = members_of(auth, w["id"], y, m, auth.get("u"))
+            got = members_of(auth, w["id"], y, m, auth.get("u"), bool(b.get("meta")))
+            res[w["name"]] = res.get(w["name"], []) + got
         return {"members": res}
 
     raise BybError("알 수 없는 요청")
