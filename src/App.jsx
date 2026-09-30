@@ -365,7 +365,7 @@ export default function App() {
     { id: "search", label: "기록 검색", icon: Search },
     { id: "lost", label: "분실물", icon: PackageSearch },
     { id: "events", label: "주요 행사·일정", icon: CalendarDays },
-    { id: "worklogs", label: "작업 기록", icon: FileText },
+    ...(isAI ? [{ id: "worklogs", label: "작업 기록", icon: FileText }] : []),
     { id: "files", label: "자료실", icon: FolderOpen },
     { id: "attendance", label: "출석부 생성", icon: CalendarCheck },
     { id: "apply", label: "신청서 생성", icon: FileText },
@@ -409,11 +409,11 @@ export default function App() {
         {tab === "search" && <RecordSearch complaints={complaints} />}
         {tab === "lost" && <Lost me={me} rows={lost} setRows={setLost} />}
         {tab === "events" && <Events me={me} rows={events} setRows={setEvents} />}
-        {tab === "worklogs" && <WorkLogs me={me} />}
+        {tab === "worklogs" && isAI && <WorkLogs me={me} />}
         {tab === "files" && <SharedFiles me={me} />}
-        {tab === "attendance" && <Attendance key="att" />}
-        {tab === "apply" && <Attendance key="apply" mode="apply" />}
-        {tab === "lessonbyb" && <Attendance key="lesson" mode="lesson" />}
+        {tab === "attendance" && <Attendance key="att" me={me} />}
+        {tab === "apply" && <Attendance key="apply" mode="apply" me={me} />}
+        {tab === "lessonbyb" && <Attendance key="lesson" mode="lesson" me={me} />}
         {tab === "officelog" && isOffice && <OfficeLog me={me} />}
         {tab === "link" && <LinkInfo />}
       </div>
@@ -2143,7 +2143,7 @@ function WorkLogs({ me }) {
         </div>
       </div>
       <div className="flex gap-1.5 mb-3">
-        {["전체", "강습", "독서실", "골프백"].map((k) => (
+        {["전체", "강습", "출석부", "신청서", "독서실", "골프백"].map((k) => (
           <button key={k} onClick={() => setFilter(k)} className={`text-xs font-medium px-3 py-1.5 rounded-full ${filter === k ? "bg-emerald-600 text-white" : "bg-white border border-slate-200 text-slate-500"}`}>{k}</button>
         ))}
       </div>
@@ -2204,7 +2204,7 @@ async function attCall(body) {
 const APPLY_KEYWORDS = ["농구", "축구", "2단지 요가", "2단지 줌바", "2단지 매트", "2단지 방송", "2단지 근력", "수영", "아쿠아", "2단지 타바타"];
 let BYB_AUTH = null; // 바이비 로그인 토큰: 탭을 옮겨도 유지, 새로고침/닫으면 사라짐
 
-function Attendance({ mode = "attendance" }) {
+function Attendance({ mode = "attendance", me }) {
   const isApply = mode === "apply";
   const next = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1);
   const [step, setStep] = useState(() => (BYB_AUTH ? "ready" : "login")); // login → otp → ready
@@ -2296,6 +2296,9 @@ function Attendance({ mode = "attendance" }) {
     a.href = url; a.download = `${isApply ? "신청서" : "출석부"}_${year}년${String(month).padStart(2, "0")}월.zip`; a.click();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
     const total = data.reduce((s, [, m]) => s + m.length, 0);
+    logWork({ kind: isApply ? "신청서" : "출석부", action: "생성", target: `${year}년 ${month}월`,
+      seat: isApply ? APPLY_KEYWORDS.filter((k) => kws[k]).join(", ") : ATT_KINDS.filter((k) => kinds[k]).join(", "),
+      member: `강좌 ${data.length}개 · ${total}명`, by: me?.id || "?", at: nowLocal().replace("T", " ") });
     setLog([`강좌 ${data.length}개 · 회원 ${total}명`, ...(r.log || [])]);
     setProg(null);
   });
@@ -2328,7 +2331,7 @@ function Attendance({ mode = "attendance" }) {
         {step === "ready" && mode === "lesson" && (
           <>
             <p className="text-xs text-emerald-700 flex items-center gap-1 mb-3"><CheckCircle2 size={14} /> 바이비 로그인됨 ({user})</p>
-            <LessonPanel call={async (body) => { const j = await attCall({ ...body, auth: BYB_AUTH }); if (j.auth) setAuth(j.auth); return j; }} />
+            <LessonPanel me={me} call={async (body) => { const j = await attCall({ ...body, auth: BYB_AUTH }); if (j.auth) setAuth(j.auth); return j; }} />
           </>
         )}
         {step === "ready" && mode !== "lesson" && (
@@ -2435,7 +2438,7 @@ function lessonCalc({ info, y, m, holi, action, when, regAt, price }) {
     text: `수강 ${attended}회 × ${Math.round(unit).toLocaleString()}원 사용 → 환불` };
 }
 
-function LessonPanel({ call }) {
+function LessonPanel({ call, me }) {
   const now = new Date();
   const [cat, setCat] = useState("GX");
   const [ym, setYm] = useState({ y: now.getFullYear(), m: now.getMonth() + 1 });
@@ -2489,6 +2492,8 @@ function LessonPanel({ call }) {
     try {
       await call({ action: "cancel", rid: pick.rid, amount, reason, course });
       setDoneMsg(`${pick.name} 취소 완료 · 환불 ${amount.toLocaleString()}원`);
+      logWork({ kind: "강습", action: "취소", target: course, seat: `${ym.y}-${String(ym.m).padStart(2, "0")} 창구`, member: pick.name,
+        dong: pick.dong, ho: pick.ho, amount: String(amount), timing: `환불 · 사유: ${reason}`, by: me?.id || "?", at: nowLocal().replace("T", " ") });
       setConfirm(false); setPick(null); setManual("");
       await loadMembers();
     } catch (e) { setErr(e.message); } finally { setBusy(""); }
@@ -2540,6 +2545,8 @@ function LessonPanel({ call }) {
       await call({ action: "register", windowId: win.id, rauthId: person.rauthId, uid: person.uid, course,
         month: `${ym.y}-${String(ym.m).padStart(2, "0")}`, deduct: amount, price });
       setDoneMsg(`${person.name} (${dong}동 ${ho}호) ${ym.m}월 등록 완료 · 차감 ${amount.toLocaleString()}원`);
+      logWork({ kind: "강습", action: "등록", target: course, seat: `${ym.y}-${String(ym.m).padStart(2, "0")} 창구`, member: person.name,
+        dong, ho, amount: String(amount), timing: `차감 · 강습료 ${price.toLocaleString()}원`, by: me?.id || "?", at: nowLocal().replace("T", " ") });
       setConfirm(false); setPerson(null); setPeople(null); setManual("");
     } catch (e) { setErr(e.message); } finally { setBusy(""); }
   };
