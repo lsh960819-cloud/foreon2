@@ -240,7 +240,9 @@ def members_of(auth, wid, year, month, me, with_meta=False):
             uid = find_key(it, ID_KEYS)
             if uid and uid != me and uid not in ids:
                 ids.append(uid)
-                meta[uid] = {"rid": it.get("reservationId") or it.get("id"), "at": it.get("createdAt") or ""}
+                rc = it.get("reservationCustomer") or {}
+                meta[uid] = {"rid": it.get("reservationId") or it.get("id"), "at": it.get("createdAt") or "",
+                             "dong": str(rc.get("dong") or ""), "ho": str(rc.get("ho") or "")}
         if len(its) < 100:
             break
         pg += 1
@@ -249,11 +251,17 @@ def members_of(auth, wid, year, month, me, with_meta=False):
         js = api(auth, "POST", "/membermanage/manager/member/blueIdList", {"userList": ids[i:i + 50]})
         got = {u.get("blueId"): u for u in (js or []) if isinstance(u, dict)}
         for x in ids[i:i + 50]:
+            mt = meta.get(x, {})
             if x in got:
                 m = api_to_members([got[x]])[0]
-                if with_meta:
-                    m.update(meta.get(x, {}), uid=x)
-                mem.append(m)
+            else:   # 회원 정보 조회가 안 되는 예약자도 빠뜨리지 않음 (앱 미가입·카드 등록 회원 등)
+                m = {"name": f"(이름확인필요 {x})", "dong": mt.get("dong", ""), "ho": mt.get("ho", ""), "phone": ""}
+                print(f"  ! 이름 조회 실패: {x} ({mt.get('dong')}동 {mt.get('ho')}호)")
+            if not m.get("dong") and mt.get("dong"):
+                m["dong"], m["ho"] = mt["dong"], mt.get("ho", "")
+            if with_meta:
+                m.update({k: mt.get(k) for k in ("rid", "at")}, uid=x)
+            mem.append(m)
     return mem
 
 
