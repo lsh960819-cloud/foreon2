@@ -2451,6 +2451,26 @@ function LessonPanel({ call }) {
   const [manual, setManual] = useState("");
   const [busy, setBusy] = useState(""); const [err, setErr] = useState("");
   const [winId, setWinId] = useState("");
+  const [q, setQ] = useState("");   // 취소 명단 이름 검색
+  const [holiMsg, setHoliMsg] = useState("");
+  const holiKey = `lesson_holidays_${ym.y}-${String(ym.m).padStart(2, "0")}`;
+  // 월별 공휴일: 한 번 체크하면 저장돼서 다음에도(다른 직원도) 그대로 사용
+  React.useEffect(() => {
+    let alive = true;
+    setHoli([]); setHoliMsg("");
+    supabase.from("settings").select("value").eq("key", holiKey).maybeSingle().then(({ data }) => {
+      if (!alive || !data || !data.value) return;
+      setHoli(String(data.value).split(",").map(Number).filter((n) => n >= 1 && n <= 31));
+      setHoliMsg("저장된 공휴일을 불러왔어요");
+    });
+    return () => { alive = false; };
+  }, [holiKey]);
+  const toggleHoli = (d) => {
+    const next = (holi.includes(d) ? holi.filter((x) => x !== d) : [...holi, d]).sort((a, b) => a - b);
+    setHoli(next);
+    supabase.from("settings").upsert({ key: holiKey, value: next.join(",") })
+      .then(({ error }) => setHoliMsg(error ? "공휴일 저장 실패: " + error.message : `${ym.m}월 공휴일 저장됨 (${next.length ? next.join(", ") + "일" : "없음"})`));
+  };
   const [people, setPeople] = useState(null); const [person, setPerson] = useState(null);
   const [confirm, setConfirm] = useState(false); const [reason, setReason] = useState(""); const [doneMsg, setDoneMsg] = useState("");
 
@@ -2478,7 +2498,7 @@ function LessonPanel({ call }) {
   const loadMembers = async (c = course) => {
     const item = list.find((x) => x.name === c);
     if (!item) return;
-    setBusy("수강생 불러오는 중"); setErr(""); setPick(null); setConfirm(false);
+    setBusy("수강생 불러오는 중"); setErr(""); setPick(null); setConfirm(false); setQ("");
     try {
       const { members: r } = await call({ action: "members", meta: true, year: ym.y, month: ym.m,
         windows: item.ids.map((id) => ({ id, name: c })) });
@@ -2532,7 +2552,7 @@ function LessonPanel({ call }) {
       <div>
         <p className="text-xs text-slate-500 mb-1">작업할 창구 (월)</p>
         <div className="flex flex-wrap gap-1.5">
-          {months.map((o) => <button key={o.y * 100 + o.m} className={chip(ym.y === o.y && ym.m === o.m)} onClick={() => { setYm(o); setHoli([]); }}>{o.y}년 {o.m}월</button>)}
+          {months.map((o) => <button key={o.y * 100 + o.m} className={chip(ym.y === o.y && ym.m === o.m)} onClick={() => setYm(o)}>{o.y}년 {o.m}월</button>)}
         </div>
       </div>
       <L label={`강좌 (${list.length}개)`}>
@@ -2556,12 +2576,13 @@ function LessonPanel({ call }) {
           {Array.from({ length: last }, (_, i) => i + 1).map((d) => {
             const off = holi.includes(d);
             return (
-              <button key={d} onClick={() => setHoli(off ? holi.filter((x) => x !== d) : [...holi, d])}
+              <button key={d} onClick={() => toggleHoli(d)}
                 className={`py-1.5 rounded border ${off ? "bg-rose-500 border-rose-500 text-white line-through" : cls.has(d) ? "bg-emerald-50 border-emerald-300 text-emerald-800 font-semibold" : "border-slate-200 text-slate-500"}`}>{d}</button>
             );
           })}
         </div>
-        <p className="text-[11px] text-slate-400 mt-1">쉬는 날을 눌러 빨간색으로 표시하세요. 다시 누르면 해제됩니다.</p>
+        <p className="text-[11px] text-slate-400 mt-1">쉬는 날을 눌러 빨간색으로 표시하세요. 다시 누르면 해제됩니다. <b>월별로 자동 저장</b>돼서 다음에도 그대로 적용돼요.</p>
+        {holiMsg && <p className="text-[11px] text-emerald-700 mt-0.5">✔ {holiMsg}</p>}
       </div>
       <ActionToggle action={action} setAction={(a) => { setAction(a); setPick(null); setManual(""); setConfirm(false); }} />
       {action === "등록" ? (
@@ -2587,14 +2608,21 @@ function LessonPanel({ call }) {
           {!course ? <p className="text-xs text-slate-400">강좌를 먼저 고르세요.</p>
             : members == null ? <p className="text-xs text-slate-400">불러오는 중…</p>
             : !members.length ? <p className="text-xs text-slate-400">{ym.m}월 확정 수강생이 없어요.</p>
-            : <div className="border border-slate-200 rounded-lg max-h-60 overflow-y-auto divide-y divide-slate-100">
-                {members.map((mb, i) => (
+            : <>
+              <div className="relative mb-1.5">
+                <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input className={attInput + " pl-8"} placeholder="이름으로 찾기 (예: 이승)" value={q} onChange={(e) => setQ(e.target.value)} />
+              </div>
+              <div className="border border-slate-200 rounded-lg max-h-60 overflow-y-auto divide-y divide-slate-100">
+                {members.filter((mb) => !q.trim() || mb.name.startsWith(q.trim())).length === 0 && <p className="text-xs text-slate-400 p-3">'{q}'(으)로 시작하는 수강생이 없어요.</p>}
+                {members.filter((mb) => !q.trim() || mb.name.startsWith(q.trim())).map((mb, i) => (
                   <button key={i} onClick={() => setPick(mb)}
                     className={`w-full text-left px-3 py-2 text-sm ${pick === mb ? "bg-rose-50 text-rose-800 font-medium" : "hover:bg-slate-50"}`}>
                     {mb.name} <span className="text-xs text-slate-400">{mb.dong}동 {mb.ho}호 · {mb.at ? mb.at.slice(0, 16).replace("T", " ") + " 등록" : ""}</span>
                   </button>
                 ))}
-              </div>}
+              </div>
+            </>}
         </div>
       )}
       {info && (
