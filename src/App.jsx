@@ -2452,24 +2452,34 @@ function LessonPanel({ call }) {
   const [busy, setBusy] = useState(""); const [err, setErr] = useState("");
   const [winId, setWinId] = useState("");
   const [q, setQ] = useState("");   // 취소 명단 이름 검색
+  const [cq, setCq] = useState("");  // 강좌 검색 (띄어쓰기 무시, 여러 단어 모두 포함)
   const [holiMsg, setHoliMsg] = useState("");
   const holiKey = `lesson_holidays_${ym.y}-${String(ym.m).padStart(2, "0")}`;
   // 월별 공휴일: 한 번 체크하면 저장돼서 다음에도(다른 직원도) 그대로 사용
   React.useEffect(() => {
     let alive = true;
-    setHoli([]); setHoliMsg("");
-    supabase.from("settings").select("value").eq("key", holiKey).maybeSingle().then(({ data }) => {
-      if (!alive || !data || !data.value) return;
-      setHoli(String(data.value).split(",").map(Number).filter((n) => n >= 1 && n <= 31));
-      setHoliMsg("저장된 공휴일을 불러왔어요");
-    });
+    const parse = (v) => String(v || "").split(",").map(Number).filter((n) => n >= 1 && n <= 31);
+    let local = null;
+    try { local = localStorage.getItem(holiKey); } catch {}
+    setHoli(local != null ? parse(local) : []);
+    setHoliMsg(local ? "저장된 공휴일을 불러왔어요" : "");
+    // 공유 저장소(Supabase)에 있으면 그걸 우선 사용 — 연결이 안 되면 이 PC 저장값 사용
+    supabase.from("settings").select("value").eq("key", holiKey).maybeSingle()
+      .then(({ data }) => {
+        if (!alive || !data || data.value == null) return;
+        setHoli(parse(data.value));
+        setHoliMsg("저장된 공휴일을 불러왔어요 (직원 공유)");
+      }, () => {});
     return () => { alive = false; };
   }, [holiKey]);
   const toggleHoli = (d) => {
     const next = (holi.includes(d) ? holi.filter((x) => x !== d) : [...holi, d]).sort((a, b) => a - b);
     setHoli(next);
+    const label = `${ym.m}월 공휴일 저장됨 (${next.length ? next.join(", ") + "일" : "없음"})`;
+    try { localStorage.setItem(holiKey, next.join(",")); } catch {}
+    setHoliMsg(label + " · 이 PC");
     supabase.from("settings").upsert({ key: holiKey, value: next.join(",") })
-      .then(({ error }) => setHoliMsg(error ? "공휴일 저장 실패: " + error.message : `${ym.m}월 공휴일 저장됨 (${next.length ? next.join(", ") + "일" : "없음"})`));
+      .then(({ error }) => { if (!error) setHoliMsg(label + " · 직원 공유"); }, () => {});
   };
   const [people, setPeople] = useState(null); const [person, setPerson] = useState(null);
   const [confirm, setConfirm] = useState(false); const [reason, setReason] = useState(""); const [doneMsg, setDoneMsg] = useState("");
@@ -2485,7 +2495,7 @@ function LessonPanel({ call }) {
   };
 
   const loadCourses = async () => {
-    setBusy("강좌 불러오는 중"); setErr(""); setCourse(""); setMembers(null); setPick(null);
+    setBusy("강좌 불러오는 중"); setErr(""); setCourse(""); setCq(""); setMembers(null); setPick(null);
     try {
       const { windows } = await call({ action: "windows", keywords: BYB_LCATS[cat] });
       const map = new Map();
@@ -2508,6 +2518,9 @@ function LessonPanel({ call }) {
   React.useEffect(() => { if (course && action === "취소") loadMembers(); }, [course, action, ym.y, ym.m]);  // eslint-disable-line
 
   const item = list.find((x) => x.name === course);
+  const flat = (t) => String(t).replace(/[\s\-()/·.,]/g, "");
+  const cwords = cq.trim().split(/\s+/).map(flat).filter(Boolean);
+  const courseHits = list.filter((c) => cwords.every((w) => flat(c.name).includes(w)));
   const off = (ym.y - now.getFullYear()) * 12 + ym.m - (now.getMonth() + 1);
   const appKey = off < 0 ? "prevMonth" : off === 0 ? "thisMonth" : "nextMonth";
   const autoWin = item ? [...item.ws].sort((a, b) => ((b.apps || {})[appKey] || 0) - ((a.apps || {})[appKey] || 0) || (b.visible ? 1 : 0) - (a.visible ? 1 : 0))[0] : null;
@@ -2555,12 +2568,29 @@ function LessonPanel({ call }) {
           {months.map((o) => <button key={o.y * 100 + o.m} className={chip(ym.y === o.y && ym.m === o.m)} onClick={() => setYm(o)}>{o.y}년 {o.m}월</button>)}
         </div>
       </div>
-      <L label={`강좌 (${list.length}개)`}>
-        <select className={attInput} value={course} onChange={(e) => { setCourse(e.target.value); setManual(""); setPriceStr(""); setWinId(""); setConfirm(false); }}>
-          <option value="">— 강좌 선택 —</option>
-          {list.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
-        </select>
-      </L>
+      <div>
+        <p className="text-xs text-slate-500 mb-1">강좌 ({list.length}개)</p>
+        {course ? (
+          <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 flex items-center justify-between gap-2">
+            <span className="text-sm text-emerald-800">✔ <b>{course}</b></span>
+            <button onClick={() => { setCourse(""); setCq(""); setConfirm(false); setMembers(null); }} className="text-xs text-emerald-700 underline shrink-0">변경</button>
+          </div>
+        ) : (
+          <>
+            <div className="relative">
+              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input className={attInput + " pl-8"} placeholder="강좌 검색 (예: 화목 07 / 김소운 / 초급)" value={cq} onChange={(e) => setCq(e.target.value)} />
+            </div>
+            <div className="mt-1 border border-slate-200 rounded-lg max-h-60 overflow-y-auto divide-y divide-slate-100">
+              {courseHits.length === 0 && <p className="text-xs text-slate-400 p-3">검색 결과가 없어요.</p>}
+              {courseHits.map((c) => (
+                <button key={c.name} onClick={() => { setCourse(c.name); setManual(""); setPriceStr(""); setWinId(""); setConfirm(false); }}
+                  className="block w-full text-left px-3 py-2 text-sm hover:bg-emerald-50">{c.name}</button>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
       {item && item.ws.length > 1 && (
         <L label="같은 이름 창구가 여러 개예요 — 사용할 창구">
           <select className={attInput} value={win ? win.id : ""} onChange={(e) => setWinId(e.target.value)}>
