@@ -365,7 +365,6 @@ export default function App() {
     { id: "search", label: "기록 검색", icon: Search },
     { id: "lost", label: "분실물", icon: PackageSearch },
     { id: "events", label: "주요 행사·일정", icon: CalendarDays },
-    { id: "lessons", label: "등록·취소·이월", icon: GraduationCap },
     { id: "worklogs", label: "작업 기록", icon: FileText },
     { id: "files", label: "자료실", icon: FolderOpen },
     { id: "attendance", label: "출석부 생성", icon: CalendarCheck },
@@ -410,7 +409,6 @@ export default function App() {
         {tab === "search" && <RecordSearch complaints={complaints} />}
         {tab === "lost" && <Lost me={me} rows={lost} setRows={setLost} />}
         {tab === "events" && <Events me={me} rows={events} setRows={setEvents} />}
-        {tab === "lessons" && <Registrations me={me} />}
         {tab === "worklogs" && <WorkLogs me={me} />}
         {tab === "files" && <SharedFiles me={me} />}
         {tab === "attendance" && <Attendance key="att" />}
