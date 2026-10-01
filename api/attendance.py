@@ -197,12 +197,66 @@ def get_channels(auth):
         return FALLBACK_CHANNELS
 
 
-def list_windows(auth, keywords=None):
+# ───────────── 수영 반편성표 (26.10 ~ 27.02) ─────────────
+# 이 기간에는 편성표에 있는 (요일·시간·수준·강사) 창구만 사용 → 지난 편성 창구는 제외
+SWIM_PERIOD = ((2026, 10), (2027, 2))
+_AM = ["06:30", "07:30", "09:00", "10:00"]
+_PM = ["16:00", "17:00", "19:00", "20:00"]
+SWIM_ROSTER = {}
+for _t in _AM:
+    SWIM_ROSTER[("화목", _t)] = [("기초", "손태환"), ("초급", "이규상"), ("중급", "김소운"), ("상급", "박범호")]
+    SWIM_ROSTER[("수금", _t)] = [("기초", "박범호"), ("초급", "손태환"), ("중급", "이규상"), ("상급", "김소운")]
+for _t in _PM:
+    SWIM_ROSTER[("화목", _t)] = [("기초", "윤성수"), ("초급", "정인혁"), ("중급", "전유정"), ("상급", "박동환")]
+    SWIM_ROSTER[("수금", _t)] = [("기초", "박동환"), ("초급", "전유정"), ("중급", "정인혁"), ("상급", "윤성수")]
+SWIM_ROSTER.update({
+    ("토", "06:30"): [("기초", "김소운"), ("초급", "이규상"), ("중급", "박범호"), ("상급", "손태준")],
+    ("토", "07:30"): [("기초", "김소운"), ("초급", "이규상"), ("중급", "박범호"), ("상급", "손태준")],
+    ("토", "09:00"): [("기초초급", "손태준"), ("중상급", "김소운"), ("상급", "박범호"), ("기초초급", "이규상")],
+    ("토", "10:00"): [("기초초급", "손태준"), ("중상급", "김소운"), ("상급", "박범호"), ("중상급", "이규상")],
+    ("토", "16:00"): [("기초", "정인혁"), ("초급", "전유정"), ("기초초급", "윤성수"), ("중상급", "박동환")],
+    ("토", "17:00"): [("중급", "전유정"), ("상급", "정인혁"), ("기초초급", "윤성수"), ("중상급", "박동환")],
+    ("토", "19:00"): [("기초초급", "정인혁"), ("중급", "전유정"), ("상급", "윤성수"), ("기초초급", "박동환")],
+    ("토", "20:00"): [("기초초급", "정인혁"), ("중급", "전유정"), ("상급", "윤성수"), ("상급", "박동환")],
+})
+# 토요일은 같은 시간·강사로 성인/어린이 창구가 둘 다 있어서 구분이 필요한 칸만 지정
+SWIM_WHO = {("토", "09:00", "손태준"): "성인", ("토", "16:00", "정인혁"): "성인", ("토", "17:00", "정인혁"): "성인",
+            ("토", "20:00", "윤성수"): "성인", ("토", "09:00", "이규상"): "어린이", ("토", "19:00", "박동환"): "어린이"}
+_LV = {"기초초급": {"기초", "초급"}, "중상급": {"중급", "상급"}}
+
+
+def _lv(x):
+    return _LV.get(x, {x})
+
+
+def swim_allowed(name, y, m):
+    """수영(아쿠아 제외) 강좌가 반편성표에 있는 창구인지. 편성표 기간 밖이면 항상 허용"""
+    if "수영" not in name or not y or not m:
+        return True
+    if not (SWIM_PERIOD[0] <= (int(y), int(m)) <= SWIM_PERIOD[1]):
+        return True
+    lv = re.search(r"수영-([가-힣]+)\(", name)
+    inner = name.split("(")[-1]
+    t = re.search(r"([월화수목금토일]+)(\d{1,2})시(?:(\d{1,2})분)?", inner)
+    ins = parse_class(name)[2]
+    if not (lv and t and ins):
+        return True
+    key = (t.group(1), f"{int(t.group(2)):02d}:{int(t.group(3) or 0):02d}")
+    who = SWIM_WHO.get((key[0], key[1], ins))
+    if who and who != ("어린이" if "어린이" in name else "성인"):
+        return False
+    return any(i == ins and _lv(l) & _lv(lv.group(1)) for l, i in SWIM_ROSTER.get(key, []))
+
+
+def list_windows(auth, keywords=None, y=None, m=None):
     chans = get_channels(auth)
     out, seen = [], set()
     for kw in (keywords or [PRODUCT_KEYWORD]):
         _list_windows_kw(auth, chans, kw, out, seen)
-    return out
+    dropped = [w["name"] for w in out if not swim_allowed(w["name"], y, m)]
+    if dropped:
+        print(f"반편성표에 없는 수영 창구 {len(dropped)}개 제외")
+    return [w for w in out if swim_allowed(w["name"], y, m)]
 
 
 def _list_windows_kw(auth, chans, kw, out, seen):
@@ -806,7 +860,7 @@ def handle(b):
     auth = decode_auth(b.get("auth", ""))
 
     if act == "windows":
-        return {"windows": list_windows(auth, b.get("keywords"))}
+        return {"windows": list_windows(auth, b.get("keywords"), b.get("year"), b.get("month"))}
 
     if act == "cancel":   # 수강 취소 + 환불 (바이비 [환불] 버튼과 같은 요청)
         rid = str(b["rid"])

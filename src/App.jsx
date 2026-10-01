@@ -2258,12 +2258,12 @@ function Attendance({ mode = "attendance", me }) {
     };
     const keywords = APPLY_KEYWORDS.filter((k) => kws[k]);
     if (isApply && !keywords.length) throw new Error("검색할 강좌를 하나 이상 골라 주세요.");
-    const { windows } = await withAuth(isApply ? { action: "windows", keywords } : { action: "windows" });
-    const list = isApply ? windows : windows.filter((w) => kinds[attKindOf(w.name)]);
-    if (!list.length) throw new Error("선택한 종류의 강좌가 없어요.");
     // 신청서: N월 신청서 = (N-1)월 창구 명단
     const src = isApply ? new Date(year, month - 2, 1) : new Date(year, month - 1, 1);
     const sy = src.getFullYear(), sm = src.getMonth() + 1;
+    const { windows } = await withAuth(isApply ? { action: "windows", keywords, year: sy, month: sm } : { action: "windows", year: sy, month: sm });
+    const list = isApply ? windows : windows.filter((w) => kinds[attKindOf(w.name)]);
+    if (!list.length) throw new Error("선택한 종류의 강좌가 없어요.");
     const chunks = [];
     for (let i = 0; i < list.length; i += 10) chunks.push(list.slice(i, i + 10));
     const got = {};
@@ -2502,13 +2502,13 @@ function LessonPanel({ call, me }) {
   const loadCourses = async () => {
     setBusy("강좌 불러오는 중"); setErr(""); setCourse(""); setCq(""); setMembers(null); setPick(null);
     try {
-      const { windows } = await call({ action: "windows", keywords: BYB_LCATS[cat] });
+      const { windows } = await call({ action: "windows", keywords: BYB_LCATS[cat], year: ym.y, month: ym.m });
       const map = new Map();
       windows.forEach((w) => { if (!map.has(w.name)) map.set(w.name, []); map.get(w.name).push(w); });
       setList([...map].map(([n, ws]) => ({ name: n, ids: ws.map((w) => w.id), ws })).sort((a, b) => a.name.localeCompare(b.name, "ko")));
     } catch (e) { setErr(e.message); } finally { setBusy(""); }
   };
-  React.useEffect(() => { loadCourses(); }, [cat]);  // eslint-disable-line
+  React.useEffect(() => { loadCourses(); }, [cat, ym.y, ym.m]);  // eslint-disable-line
 
   const loadMembers = async (c = course) => {
     const item = list.find((x) => x.name === c);
