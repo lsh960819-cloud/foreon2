@@ -441,6 +441,25 @@ def swap_day_refs(ws, old, new):
                 c.value = pat.sub(f"{new}!", v)
 
 
+def fix_day_refs(wb, ws):
+    """날짜 머리글이 강좌명의 요일과 다른 날짜 시트를 보고 있으면 바로잡음 (양식 실수 대비)"""
+    day = parse_class(ws.title)[1]
+    if not day:
+        return
+    refs = set()
+    for row in ws.iter_rows(min_row=1, max_row=6):
+        for c in row:
+            v = c.value
+            t = v.text if isinstance(v, ArrayFormula) else v
+            if isinstance(t, str) and t.startswith("="):
+                refs |= set(re.findall(r"(?<![가-힣])'?([월화수목금토일]+)'?!", t))
+    for ref in refs:
+        if ref != day and ref in wb.sheetnames:
+            ensure_helper(wb, day, ref)
+            swap_day_refs(ws, ref, day)
+            print(f"  ~ 날짜 기준 수정: {ws.title} ({ref} → {day})")
+
+
 def build_workbook(tpl_path, classes, data, year, month, holidays, out_path):
     wb = load_workbook(tpl_path)
     existing = {ws.title: ws for ws in wb.worksheets if is_class_sheet(ws)}
@@ -465,6 +484,7 @@ def build_workbook(tpl_path, classes, data, year, month, holidays, out_path):
                 inner = re.sub(rf"{instr}\)$", ")", cname[len(base):]) if instr else cname[len(base):]
                 ws["A1"].value = (base.replace(PRODUCT_KEYWORD, "").strip() + " " + inner.strip("()")).strip()
             print(f"  + 새 시트 생성: {title}")
+        fix_day_refs(wb, ws)
         fill_sheet(ws, data[cname])
         made.append(ws)
 
