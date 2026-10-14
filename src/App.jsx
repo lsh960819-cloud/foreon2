@@ -3,7 +3,7 @@ import {
   LogIn, LogOut, Search, PackageSearch, ClipboardList, CalendarDays, Home as HomeIcon,
   Plus, X, User, Loader2, MessageSquareWarning, ArrowLeftRight, Inbox, Send, Upload,
   CheckCircle2, Clock, FileText, GraduationCap, PlayCircle, Pencil, Trash2, Copy,
-  FolderOpen, Download, RefreshCw, CalendarCheck
+  FolderOpen, Download, RefreshCw, CalendarCheck, Receipt
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { supabase } from "./supabaseClient.js";
@@ -370,6 +370,7 @@ export default function App() {
     { id: "attendance", label: "출석부 생성", icon: CalendarCheck },
     { id: "apply", label: "신청서 생성", icon: FileText },
     { id: "lessonbyb", label: "강습 등록·취소", icon: GraduationCap },
+    { id: "expense", label: "지출증빙·검수", icon: Receipt },
     ...(isOffice ? [{ id: "officelog", label: "사무실 업무일지", icon: ClipboardList }] : []),
     { id: "link", label: "외부 연동", icon: ArrowLeftRight },
   ];
@@ -414,6 +415,7 @@ export default function App() {
         {tab === "attendance" && <Attendance key="att" me={me} />}
         {tab === "apply" && <Attendance key="apply" mode="apply" me={me} />}
         {tab === "lessonbyb" && <Attendance key="lesson" mode="lesson" me={me} />}
+        {tab === "expense" && <Expense me={me} />}
         {tab === "officelog" && isOffice && <OfficeLog me={me} />}
         {tab === "link" && <LinkInfo />}
       </div>
@@ -2143,7 +2145,7 @@ function WorkLogs({ me }) {
         </div>
       </div>
       <div className="flex gap-1.5 mb-3">
-        {["전체", "강습", "출석부", "신청서", "독서실", "골프백"].map((k) => (
+        {["전체", "강습", "출석부", "신청서", "지출증빙", "독서실", "골프백"].map((k) => (
           <button key={k} onClick={() => setFilter(k)} className={`text-xs font-medium px-3 py-1.5 rounded-full ${filter === k ? "bg-emerald-600 text-white" : "bg-white border border-slate-200 text-slate-500"}`}>{k}</button>
         ))}
       </div>
@@ -2711,6 +2713,155 @@ function LessonPanel({ call, me }) {
       {doneMsg && <p className="text-sm text-emerald-700">✔ {doneMsg}</p>}
       {busy && <p className="text-xs text-slate-500 flex items-center gap-1"><Loader2 size={13} className="animate-spin" /> {busy}</p>}
       {err && <p className="text-sm text-red-600 break-all">⚠ {err}</p>}
+    </div>
+  );
+}
+
+/* ─────────────────────── 지출증빙 및 검수 보고 (엑셀 생성) */
+const todayIso = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+const lsGet = (k, d) => { try { return localStorage.getItem(k) || d; } catch { return d; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
+
+function PhotoPick({ label, hint, files, setFiles, max = 6 }) {
+  const urls = useMemo(() => files.map((f) => URL.createObjectURL(f)), [files]);
+  React.useEffect(() => () => urls.forEach((u) => URL.revokeObjectURL(u)), [urls]);
+  return (
+    <div className="rounded-xl border border-dashed border-slate-300 p-3">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs font-semibold text-slate-600">{label} <span className="font-normal text-slate-400">{hint}</span></p>
+        <label className="text-xs rounded-lg bg-slate-100 hover:bg-slate-200 px-2.5 py-1 cursor-pointer flex items-center gap-1">
+          <Plus size={12} /> 사진 추가
+          <input type="file" accept="image/*" multiple className="hidden"
+            onChange={(e) => { setFiles([...files, ...e.target.files].slice(0, max)); e.target.value = ""; }} />
+        </label>
+      </div>
+      {files.length === 0 ? <p className="text-xs text-slate-400">아직 없음</p> : (
+        <div className="flex flex-wrap gap-2">
+          {files.map((f, i) => (
+            <div key={i} className="relative">
+              <img src={urls[i]} alt="" className="h-20 w-20 object-cover rounded-lg border border-slate-200" />
+              <button onClick={() => setFiles(files.filter((_, j) => j !== i))}
+                className="absolute -top-1.5 -right-1.5 bg-white border border-slate-300 rounded-full p-0.5 text-slate-500"><X size={11} /></button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Expense({ me }) {
+  const [layout, setLayout] = useState(() => lsGet("exp_layout", "approval"));
+  const [draftDate, setDraftDate] = useState(todayIso());
+  const [draftNo, setDraftNo] = useState("");
+  const [prefix, setPrefix] = useState(() => lsGet("exp_prefix", "올파포(커뮤)"));
+  const [vendor, setVendor] = useState("");
+  const [purchaseDate, setPurchaseDate] = useState(todayIso());
+  const [inspectDate, setInspectDate] = useState(todayIso());
+  const [inspector, setInspector] = useState(() => lsGet("exp_inspector", ""));
+  const [note, setNote] = useState("");
+  const [items, setItems] = useState([{ name: "", qty: 1, amount: "" }]);
+  const [photos, setPhotos] = useState([]);
+  const [receipts, setReceipts] = useState([]);
+  const [drafts, setDrafts] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [done, setDone] = useState("");
+
+  const isApproval = layout === "approval";
+  const [yy, mm] = draftDate ? [draftDate.slice(2, 4), draftDate.slice(5, 7)] : ["", ""];
+  const docNo = `${prefix} 제${yy}-${mm}-${draftNo || "___"}호`;
+  const total = items.reduce((s, it) => s + (Number(it.amount) || 0), 0);
+  const setItem = (i, k, v) => setItems(items.map((it, j) => (j === i ? { ...it, [k]: v } : it)));
+
+  const run = async () => {
+    setErr(""); setDone("");
+    const its = items.filter((it) => it.name.trim());
+    if (!vendor.trim()) return setErr("납품업체를 입력해 주세요.");
+    if (!its.length) return setErr("품명을 하나 이상 입력해 주세요.");
+    if (!draftNo.trim()) return setErr("기안 번호를 입력해 주세요.");
+    setBusy(true);
+    try {
+      lsSet("exp_layout", layout); lsSet("exp_prefix", prefix); lsSet("exp_inspector", inspector);
+      const { buildExpenseXlsx, prepImage } = await import("./expenseXlsx.js");
+      const prep = (fs) => Promise.all(fs.map((f) => prepImage(f)));
+      const blob = await buildExpenseXlsx({
+        layout, vendor: vendor.trim(), purchaseDate, inspectDate, inspector, docNo, note: note.trim(),
+        items: its, photos: await prep(photos), receipts: await prep(receipts), drafts: isApproval ? await prep(drafts) : [],
+      });
+      const fname = `지출증빙 및 검수보고_제${yy}-${mm}-${draftNo}호_${vendor.trim()}.xlsx`.replace(/[\\/:*?"<>|]/g, "_");
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = fname; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      logWork({ kind: "지출증빙", action: "생성", target: docNo, seat: vendor.trim(),
+        member: `${its.length}품목 · ${total.toLocaleString()}원`, by: me?.id || "?", at: nowLocal().replace("T", " ") });
+      setDone(`${fname} 다운로드 완료`);
+    } catch (e) { setErr(e.message || String(e)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div>
+      <Panel title="지출증빙 및 물품 검수 보고 (엑셀 생성)">
+        <div className="space-y-4">
+          <div>
+            <p className="text-[11px] font-medium text-slate-500 mb-1">결재란</p>
+            <div className="inline-flex gap-1 p-1 bg-slate-100 rounded-xl">
+              {[["approval", "있음 (1번 양식 · 기안사본 포함)"], ["simple", "없음 (2번 양식)"]].map(([k, t]) => (
+                <button key={k} onClick={() => setLayout(k)}
+                  className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${layout === k ? "bg-white shadow-sm text-emerald-700" : "text-slate-500"}`}>{t}</button>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <L label="기안 일자"><input type="date" className={attInput} value={draftDate} onChange={(e) => setDraftDate(e.target.value)} /></L>
+            <L label="기안 번호"><input className={attInput} inputMode="numeric" placeholder="예: 538" value={draftNo} onChange={(e) => setDraftNo(e.target.value.trim())} /></L>
+            <L label="문서번호 앞부분"><input className={attInput} value={prefix} onChange={(e) => setPrefix(e.target.value)} /></L>
+            <div className="text-xs text-slate-500 self-end pb-2">→ <b>{docNo}</b></div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <L label="납품업체"><input className={attInput} placeholder="예: 쿠팡" value={vendor} onChange={(e) => setVendor(e.target.value)} /></L>
+            <L label="구매일자"><input type="date" className={attInput} value={purchaseDate} onChange={(e) => setPurchaseDate(e.target.value)} /></L>
+            <L label="검수일자"><input type="date" className={attInput} value={inspectDate} onChange={(e) => setInspectDate(e.target.value)} /></L>
+            <L label="검수자"><input className={attInput} placeholder="예: 이승헌" value={inspector} onChange={(e) => setInspector(e.target.value)} /></L>
+          </div>
+
+          <div>
+            <p className="text-[11px] font-medium text-slate-500 mb-1">품목</p>
+            <div className="space-y-1.5">
+              {items.map((it, i) => (
+                <div key={i} className="flex gap-1.5 items-center">
+                  <span className="text-xs text-slate-400 w-4 text-right">{i + 1}</span>
+                  <input className={attInput + " flex-[3]"} placeholder="품명" value={it.name} onChange={(e) => setItem(i, "name", e.target.value)} />
+                  <input className={attInput + " flex-1"} type="number" min="0" placeholder="수량" value={it.qty} onChange={(e) => setItem(i, "qty", e.target.value)} />
+                  <input className={attInput + " flex-[2]"} type="number" min="0" placeholder="금액(원)" value={it.amount} onChange={(e) => setItem(i, "amount", e.target.value)} />
+                  <button disabled={items.length === 1} onClick={() => setItems(items.filter((_, j) => j !== i))} className="text-slate-400 hover:text-red-500 disabled:opacity-30 p-1"><Trash2 size={15} /></button>
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-between items-center mt-2">
+              <button onClick={() => setItems([...items, { name: "", qty: 1, amount: "" }])} className="text-xs rounded-lg border border-slate-200 px-2.5 py-1 flex items-center gap-1 text-slate-600"><Plus size={12} /> 품목 추가 (배송비도 한 줄로)</button>
+              <p className="text-sm">합계 <b>{total.toLocaleString()}</b>원</p>
+            </div>
+          </div>
+
+          <L label="비고"><input className={attInput} placeholder="예: 탁구장 비품 교체 / 골프라운지" value={note} onChange={(e) => setNote(e.target.value)} /></L>
+
+          <div className={`grid gap-2 ${isApproval ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
+            <PhotoPick label="검수사진" hint="(왼쪽 칸)" files={photos} setFiles={setPhotos} />
+            <PhotoPick label="영수증 사진" hint="(오른쪽 칸 · 현금영수증/카드전표)" files={receipts} setFiles={setReceipts} max={3} />
+            {isApproval && <PhotoPick label="기안사본" hint="(기안사본 시트)" files={drafts} setFiles={setDrafts} max={1} />}
+          </div>
+
+          <button className="rounded-lg bg-emerald-600 text-white px-4 py-2 text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-1.5" disabled={busy} onClick={run}>
+            {busy ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />} 보고서 엑셀 만들기
+          </button>
+          {done && <p className="text-sm text-emerald-700">✔ {done}</p>}
+          {err && <p className="text-sm text-red-600 break-all">⚠ {err}</p>}
+        </div>
+      </Panel>
     </div>
   );
 }
