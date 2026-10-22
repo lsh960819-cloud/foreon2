@@ -2891,7 +2891,21 @@ function StatsPanel({ call }) {
     const last = new Date(year, month, 0).getDate();
     const days = kind === "facility" ? Array.from({ length: last }, (_, i) => i + 1) : [null];
     try {
-      if (kind === "klass") {   // 강좌: 창구 목록 → 창구별 수강생 수 (15개씩)
+      if (kind === "klass") {   // 강좌: 바이비 [수강생 현황]과 같은 조회 → 안 되면 창구별 조회
+        try {
+          const acc2 = {}; let page = 0, total = null;
+          for (let i = 0; i < 300; i++) {
+            const j = await call({ action: "stats_v3", year, month, page, pages: 5 });
+            if (j.total != null) total = j.total;
+            for (const [t, n] of Object.entries(j.groups || {})) acc2[t] = (acc2[t] || 0) + n;
+            page = j.next;
+            setRes((r) => ({ ...r, klass: { loading: `${Math.min(page * 100, total ?? page * 100).toLocaleString()}${total ? ` / ${total.toLocaleString()}` : ""}건 확인 중…`, list: [] } }));
+            if (j.done) break;
+          }
+          const list = Object.entries(acc2).map(([title, n]) => ({ title, chan: "", n, people: n }))
+            .sort((x, y) => x.title.localeCompare(y.title, "ko"));
+          if (list.length) { setRes((r) => ({ ...r, klass: { list } })); return; }
+        } catch (e) { console.warn("v3 조회 실패, 창구별 조회로 전환", e); }
         const { windows = [] } = await call({ action: "stats_windows" });
         const list = [];
         for (let i = 0; i < windows.length; i += 15) {

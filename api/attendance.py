@@ -6,6 +6,7 @@ POST /api/attendance  {action: login | verify | windows | members | build, ...}
 """
 import base64
 import calendar
+import datetime
 import http.cookiejar
 import io
 import json
@@ -897,6 +898,35 @@ def count_window(auth, wid, y, m):
     return len(uids)
 
 
+
+def klass_v3_scan(auth, y, m, page, pages):
+    """바이비 [수강생 현황] 화면과 같은 조회 (POST v3/klass/reservations)"""
+    last = calendar.monthrange(y, m)[1]
+    start = (datetime.datetime(y, m, 1) - datetime.timedelta(hours=9)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    end = (datetime.datetime(y, m, last) - datetime.timedelta(hours=9)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    body = {"channelIds": get_channels(auth), "periodSearchType": "KLASS", "startDate": start, "endDate": end,
+            "dong": "", "ho": "", "productName": "", "instructorName": "", "name": ""}
+    groups, pg, done, total = {}, page, False, None
+    while pg < page + pages:
+        js = api(auth, "POST", f"/community/manager/v3/klass/reservations?page={pg}&size=100", body)
+        if isinstance(js, dict):
+            total = js.get("totalElements", total)
+        its = items_of(js)
+        for it in its:
+            w = it.get("window") if isinstance(it.get("window"), dict) else {}
+            title = (w.get("title") or it.get("productName") or it.get("windowTitle") or it.get("klassName")
+                     or find_key(it, ["productName", "windowTitle", "title"]) or "(이름 없음)").strip()
+            if title.startswith("플그"):
+                continue
+            groups[title] = groups.get(title, 0) + 1
+        pg += 1
+        if len(its) < 100:
+            done = True
+            break
+    return {"groups": groups, "next": pg, "done": done, "total": total,
+            "sample": sorted(its[0].keys()) if page == 0 and its and isinstance(its[0], dict) else None}
+
+
 def make_auth(tok, user):
     a, kind = pick_auth(tok)
     return encode_auth({"a": a, "k": kind, "u": user, "r": tok.get("refresh_token"), "t": tok.get("access_token")})
@@ -966,6 +996,9 @@ def handle(b):
         return {"zip": base64.b64encode(z).decode(), "log": LOG[-200:]}
 
     auth = decode_auth(b.get("auth", ""))
+
+    if act == "stats_v3":
+        return klass_v3_scan(auth, int(b["year"]), int(b["month"]), int(b.get("page") or 0), min(int(b.get("pages") or 5), 10))
 
     if act == "stats_windows":   # 1~4단지 전체 강좌 창구 ('플그' 제외)
         return {"windows": klass_windows_all(auth)}
