@@ -2886,17 +2886,26 @@ function StatsPanel({ call }) {
 
   const run = async (kind) => {
     setErr(""); setBusy(kind);
-    const acc = {}; let page = 0, total = 0;
+    const acc = {}; const seen = new Set(); let total = 0;
+    // 시설은 건수가 많아 하루씩 나눠 조회(바이비 응답시간 초과 방지), 같은 예약은 한 번만 셈
+    const last = new Date(year, month, 0).getDate();
+    const days = kind === "facility" ? Array.from({ length: last }, (_, i) => i + 1) : [null];
     try {
-      for (let i = 0; i < 100; i++) {
-        const j = await call({ action: "stats", kind, year, month, page, pages: 10 });
-        for (const [t, g] of Object.entries(j.groups || {})) {
-          const a = (acc[t] = acc[t] || { n: 0, uids: new Set(), chan: g.chan });
-          a.n += g.n; g.uids.forEach((u) => a.uids.add(u));
+      for (const day of days) {
+        let page = 0;
+        for (let i = 0; i < 200; i++) {
+          const j = await call({ action: "stats", kind, year, month, day, page, pages: 5 });
+          for (const [t, g] of Object.entries(j.groups || {})) {
+            const a = (acc[t] = acc[t] || { n: 0, uids: new Set(), chan: g.chan });
+            const rids = g.rids || [];
+            if (rids.length) { for (const r of rids) if (!seen.has(r)) { seen.add(r); a.n += 1; } }
+            else a.n += g.n;
+            g.uids.forEach((u) => a.uids.add(u));
+          }
+          total += j.rows || 0; page = j.next;
+          setRes((r) => ({ ...r, [kind]: { loading: day ? `${month}월 ${day}일 확인 중… (${last}일까지)` : `${page * 100}건 확인 중…`, list: [] } }));
+          if (j.done) break;
         }
-        total += j.rows || 0; page = j.next;
-        setRes((r) => ({ ...r, [kind]: { loading: `${page * 100}건 확인 중…`, list: [] } }));
-        if (j.done) break;
       }
       const list = Object.entries(acc).map(([title, a]) => ({ title, chan: a.chan, n: a.n, people: a.uids.size }))
         .sort((x, y) => x.title.localeCompare(y.title, "ko"));

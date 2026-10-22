@@ -817,16 +817,27 @@ def _s(*vals):
     return " ".join(str(v) for v in vals if isinstance(v, str))
 
 
-def scan_stats(auth, kind, y, m, page, pages):
+def _get_retry(auth, path):
+    for i in range(4):   # 바이비 "질의 응답시간 초과"는 잠깐 쉬었다 다시
+        try:
+            return api(auth, "GET", path)
+        except BybError as e:
+            if "시간 초과" not in str(e) or i == 3:
+                raise
+            time.sleep(1.5 * (i + 1))
+
+
+def scan_stats(auth, kind, y, m, page, pages, day=None, size=100):
     last = calendar.monthrange(y, m)[1]
+    d1, d2 = (day, day) if day else (1, last)
     groups, rows, pg, done = {}, 0, page, False
     while pg < page + pages:
-        q = {"page": pg, "size": 100, "latestRevision.status": "CONFIRMED", "sort": "createdAt,asc",
-             "startOffsetDateTime": f"{y}-{m:02d}-01T00:00:00+09:00",
-             "endOffsetDateTime": f"{y}-{m:02d}-{last}T23:59:59+09:00"}
+        q = {"page": pg, "size": size, "latestRevision.status": "CONFIRMED", "sort": "createdAt,asc",
+             "startOffsetDateTime": f"{y}-{m:02d}-{d1:02d}T00:00:00+09:00",
+             "endOffsetDateTime": f"{y}-{m:02d}-{d2:02d}T23:59:59+09:00"}
         if kind == "klass":
             q["scenarioType"] = "KLASS"
-        its = items_of(api(auth, "GET", f"/community/manager/v1/reservations?{urllib.parse.urlencode(q)}"))
+        its = items_of(_get_retry(auth, f"/community/manager/v1/reservations?{urllib.parse.urlencode(q)}"))
         for it in its:
             rv = it.get("reservation") if isinstance(it.get("reservation"), dict) else it
             w = rv.get("window") or {}
@@ -847,12 +858,15 @@ def scan_stats(auth, kind, y, m, page, pages):
             uid = find_key(rv, ID_KEYS) or _s((rv.get("reservationCustomer") or {}).get("dong"),
                                               (rv.get("reservationCustomer") or {}).get("ho"),
                                               (rv.get("reservationCustomer") or {}).get("name"))
-            g = groups.setdefault(title or "(이름 없음)", {"n": 0, "uids": [], "chan": chan.strip()})
+            g = groups.setdefault(title or "(이름 없음)", {"n": 0, "uids": [], "rids": [], "chan": chan.strip()})
             g["n"] += 1
+            rid = rv.get("reservationId") or rv.get("id") or it.get("reservationId") or it.get("id")
+            if rid:
+                g["rids"].append(str(rid))
             if uid and uid not in g["uids"]:
                 g["uids"].append(uid)
         pg += 1
-        if len(its) < 100:
+        if len(its) < size:
             done = True
             break
     return {"groups": groups, "rows": rows, "next": pg, "done": done}
@@ -930,7 +944,8 @@ def handle(b):
 
     if act == "stats":   # kind = klass(강좌) / facility(시설), 10페이지(1,000건)씩 끊어서 조회
         return scan_stats(auth, b.get("kind"), int(b["year"]), int(b["month"]),
-                          int(b.get("page") or 0), min(int(b.get("pages") or 10), 15))
+                          int(b.get("page") or 0), min(int(b.get("pages") or 10), 15),
+                          int(b["day"]) if b.get("day") else None, min(int(b.get("size") or 100), 100))
 
     if act == "windows":
         return {"windows": list_windows(auth, b.get("keywords"), b.get("year"), b.get("month"))}
