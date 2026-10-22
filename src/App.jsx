@@ -2738,10 +2738,13 @@ async function rrParse(file) {
   const base = (r) => ({ dong: rrNum(r[col("동")]), ho: rrNum(r[col("호")]), name: String(r[col("회원명")]).trim() });
   if (col("시설/기기") >= 0) {   // 구독현황 → 신청서
     const rows = body.map((r) => ({ ...base(r), phone: rrPhone(r[col("연락처")]),
+      rk: rrKindOf(`${r[col("그룹")] ?? ""} ${r[col("시설/기기")] ?? ""}`),
       seat: Number(String(r[col("시설/기기")]).split("/").pop().replace(/\D/g, "")) || 0,
       date: String(r[col("구독일시")]).slice(0, 10) }));
     const m = title.match(/(\d{4})-(\d{2})-\d{2}\s*~/);
-    return { type: "apply", rows, kind: rrKindOf(file.name + title), period: m ? { y: +m[1], m: +m[2] } : null };
+    let kind = rrKindOf(file.name + title);
+    if (!kind && /일반/.test(file.name + title)) kind = "일반(남녀)";
+    return { type: "apply", rows, kind, period: m ? { y: +m[1], m: +m[2] } : null };
   }
   if (col("대기순번") >= 0) {     // 추첨 지원자 리스트 → 대기자
     const rows = body.filter((r) => String(r[col("상태")]).trim() === "탈락" && rrNum(r[col("대기순번")]))
@@ -2782,8 +2785,12 @@ function ReadingRoom() {
     if (files.some((f) => !f.kind)) return setErr("구분(개인/남자일반/여자일반)을 모두 골라 주세요.");
     const sheets = {};
     for (const f of files) {
-      sheets[f.kind] = sheets[f.kind] || {};
-      sheets[f.kind][f.type] = [...(sheets[f.kind][f.type] || []), ...f.rows];
+      for (const r of f.rows) {
+        const k = f.kind === "일반(남녀)" ? r.rk : f.kind;
+        if (!RR_KINDS.includes(k)) return setErr(`${f.name}: ${r.name}(${r.dong}동 ${r.ho}호) 님이 남자/여자 어느 독서실인지 파일에서 구분이 안 돼요.`);
+        sheets[k] = sheets[k] || {};
+        (sheets[k][f.type] = sheets[k][f.type] || []).push(r);
+      }
     }
     setBusy(true);
     try {
@@ -2836,7 +2843,7 @@ function ReadingRoom() {
                 <span className="text-xs text-slate-500">{f.rows.length}명</span>
                 <select value={f.kind} onChange={(e) => setKind(i, e.target.value)} className={`${inp} py-1 ${f.kind ? "" : "border-rose-300"}`}>
                   <option value="">구분 선택</option>
-                  {RR_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
+                  {[...RR_KINDS, ...(f.type === "apply" ? ["일반(남녀)"] : [])].map((k) => <option key={k} value={k}>{k === "일반(남녀)" ? "일반(남녀 자동 분리)" : k}</option>)}
                 </select>
                 <button onClick={() => setFiles((xs) => xs.filter((_, j) => j !== i))} className="text-slate-400 hover:text-rose-500"><X size={15} /></button>
               </div>
