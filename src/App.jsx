@@ -2884,6 +2884,26 @@ function StatsPanel({ call }) {
   const [err, setErr] = useState("");
   const [res, setRes] = useState({});   // kind → [{title, n, people}]
 
+  // 바이비가 '응답시간 초과'를 내면 한 번에 받는 건수를 줄여서(50→10) 같은 위치부터 이어서 조회
+  const scan = async (action, onPart, label) => {
+    let offset = 0, size = 50, total = null, fails = 0;
+    for (let i = 0; i < 2000; i++) {
+      let j;
+      try { j = await call({ action, year, month, page: offset / size, size }); fails = 0; }
+      catch (e) {
+        if (!/시간 초과/.test(e.message)) throw e;
+        if (size > 10) { size = 10; continue; }
+        if (++fails >= 3) throw e;
+        await new Promise((r) => setTimeout(r, 3000)); continue;
+      }
+      if (j.total != null) total = j.total;
+      onPart(j);
+      offset = j.next * size;
+      setRes((r) => ({ ...r, [label]: { loading: `${Math.min(offset, total ?? offset).toLocaleString()}${total ? ` / ${total.toLocaleString()}` : ""}건 확인 중…`, list: [] } }));
+      if (j.done) break;
+    }
+  };
+
   const run = async (kind) => {
     setErr(""); setBusy(kind);
     const acc = {}; const seen = new Set(); let total = 0;
@@ -2893,15 +2913,8 @@ function StatsPanel({ call }) {
     try {
       if (kind === "klass") {   // 강좌: 바이비 [수강생 현황]과 같은 조회 → 안 되면 창구별 조회
         try {
-          const acc2 = {}; let page = 0, total = null;
-          for (let i = 0; i < 300; i++) {
-            const j = await call({ action: "stats_v3", year, month, page, pages: 5 });
-            if (j.total != null) total = j.total;
-            for (const [t, n] of Object.entries(j.groups || {})) acc2[t] = (acc2[t] || 0) + n;
-            page = j.next;
-            setRes((r) => ({ ...r, klass: { loading: `${Math.min(page * 100, total ?? page * 100).toLocaleString()}${total ? ` / ${total.toLocaleString()}` : ""}건 확인 중…`, list: [] } }));
-            if (j.done) break;
-          }
+          const acc2 = {};
+          await scan("stats_v3", (j) => { for (const [t, n] of Object.entries(j.groups || {})) acc2[t] = (acc2[t] || 0) + n; }, "klass");
           const list = Object.entries(acc2).map(([title, n]) => ({ title, chan: "", n, people: n }))
             .sort((x, y) => x.title.localeCompare(y.title, "ko"));
           if (list.length) { setRes((r) => ({ ...r, klass: { list } })); return; }
@@ -2919,18 +2932,13 @@ function StatsPanel({ call }) {
         return;
       }
       try {   // 시설: 바이비 [예약자 현황]과 같은 조회 → 안 되면 하루씩 조회
-        let page = 0, tot = null, got = false;
-        for (let i = 0; i < 600; i++) {
-          const j = await call({ action: "stats_fac_v3", year, month, page, pages: 5 });
-          if (j.total != null) tot = j.total;
+        let got = false;
+        await scan("stats_fac_v3", (j) => {
           for (const [t, g] of Object.entries(j.groups || {})) {
             const a = (acc[t] = acc[t] || { n: 0, uids: new Set(), chan: g.chan });
             a.n += g.n; g.uids.forEach((u) => a.uids.add(u)); got = true;
           }
-          page = j.next;
-          setRes((r) => ({ ...r, facility: { loading: `${Math.min(page * 100, tot ?? page * 100).toLocaleString()}${tot ? ` / ${tot.toLocaleString()}` : ""}건 확인 중…`, list: [] } }));
-          if (j.done) break;
-        }
+        }, "facility");
         if (got) days.length = 0;
       } catch (e) { throw new Error(`시설 조회 실패: ${e.message}`); }
       for (const day of days) {

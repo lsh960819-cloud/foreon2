@@ -828,6 +828,16 @@ def _get_retry(auth, path):
             time.sleep(1.5 * (i + 1))
 
 
+def _post_retry(auth, path, body):
+    for i in range(3):
+        try:
+            return api(auth, "POST", path, body)
+        except BybError as e:
+            if "시간 초과" not in str(e) or i == 2:
+                raise
+            time.sleep(2 * (i + 1))
+
+
 def scan_stats(auth, kind, y, m, page, pages, day=None, size=100):
     last = calendar.monthrange(y, m)[1]
     d1, d2 = (day, day) if day else (1, last)
@@ -903,16 +913,18 @@ def count_window(auth, wid, y, m):
 
 
 
-def klass_v3_scan(auth, y, m, page, pages):
+def klass_v3_scan(auth, y, m, page, pages, size=50):
     """바이비 [수강생 현황] 화면과 같은 조회 (POST v3/klass/reservations)"""
     last = calendar.monthrange(y, m)[1]
     start = (datetime.datetime(y, m, 1) - datetime.timedelta(hours=9)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     end = (datetime.datetime(y, m, last) - datetime.timedelta(hours=9)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     body = {"channelIds": all_channels(auth), "periodSearchType": "KLASS", "startDate": start, "endDate": end,
             "dong": "", "ho": "", "productName": "", "instructorName": "", "name": ""}
-    groups, pg, done, total = {}, page, False, None
+    groups, pg, done, total, t0 = {}, page, False, None, time.time()
     while pg < page + pages:
-        js = api(auth, "POST", f"/community/manager/v3/klass/reservations?page={pg}&size=100", body)
+        if time.time() - t0 > 40:   # Vercel 60초 제한 전에 끊고 이어서
+            break
+        js = _post_retry(auth, f"/community/manager/v3/klass/reservations?page={pg}&size={size}", body)
         if isinstance(js, dict):
             total = js.get("totalElements", total)
         its = items_of(js)
@@ -924,7 +936,7 @@ def klass_v3_scan(auth, y, m, page, pages):
                 continue
             groups[title] = groups.get(title, 0) + 1
         pg += 1
-        if len(its) < 100:
+        if len(its) < size:
             done = True
             break
     return {"groups": groups, "next": pg, "done": done, "total": total,
@@ -932,14 +944,16 @@ def klass_v3_scan(auth, y, m, page, pages):
 
 
 
-def facility_v3_scan(auth, y, m, page, pages):
+def facility_v3_scan(auth, y, m, page, pages, size=50):
     """바이비 [커뮤니티시설 예약자 현황] 화면과 같은 조회 (POST v3/reservations, 이용기간·확정만)"""
     last = calendar.monthrange(y, m)[1]
     body = {"channelIds": all_channels(auth), "statuses": ["CONFIRMED"], "zoneId": "Asia/Seoul",
             "usePeriod": {"startDate": f"{y}-{m:02d}-01", "endDate": f"{y}-{m:02d}-{last:02d}"}}
-    groups, pg, done, total, its = {}, page, False, None, []
+    groups, pg, done, total, its, t0 = {}, page, False, None, [], time.time()
     while pg < page + pages:
-        js = api(auth, "POST", f"/community/manager/v3/reservations?page={pg}&size=100", body)
+        if time.time() - t0 > 40:   # Vercel 60초 제한 전에 끊고 이어서
+            break
+        js = _post_retry(auth, f"/community/manager/v3/reservations?page={pg}&size={size}", body)
         if isinstance(js, dict):
             total = js.get("totalElements", total)
         its = items_of(js)
@@ -963,7 +977,7 @@ def facility_v3_scan(auth, y, m, page, pages):
             if uid and uid not in g["uids"]:
                 g["uids"].append(uid)
         pg += 1
-        if len(its) < 100:
+        if len(its) < size:
             done = True
             break
     return {"groups": groups, "next": pg, "done": done, "total": total}
@@ -1040,10 +1054,10 @@ def handle(b):
     auth = decode_auth(b.get("auth", ""))
 
     if act == "stats_v3":
-        return klass_v3_scan(auth, int(b["year"]), int(b["month"]), int(b.get("page") or 0), min(int(b.get("pages") or 5), 10))
+        return klass_v3_scan(auth, int(b["year"]), int(b["month"]), int(b.get("page") or 0), 30, min(int(b.get("size") or 50), 100))
 
     if act == "stats_fac_v3":
-        return facility_v3_scan(auth, int(b["year"]), int(b["month"]), int(b.get("page") or 0), min(int(b.get("pages") or 5), 10))
+        return facility_v3_scan(auth, int(b["year"]), int(b["month"]), int(b.get("page") or 0), 30, min(int(b.get("size") or 50), 100))
 
     if act == "stats_windows":   # 1~4단지 전체 강좌 창구 ('플그' 제외)
         return {"windows": klass_windows_all(auth)}
