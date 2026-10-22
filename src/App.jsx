@@ -365,6 +365,7 @@ export default function App() {
     { id: "apply", label: "신청서 생성", icon: FileText },
     { id: "reading", label: "독서실 신청서·대기자", icon: FileText },
     { id: "lessonbyb", label: "강습 등록·취소", icon: GraduationCap },
+    { id: "stats", label: "월간 이용 통계", icon: Search },
     ...(isOffice ? [{ id: "officelog", label: "사무실 업무일지", icon: ClipboardList }] : []),
     { id: "link", label: "외부 연동", icon: ArrowLeftRight },
   ];
@@ -402,6 +403,7 @@ export default function App() {
         {tab === "attendance" && <Attendance key="att" me={me} />}
         {tab === "apply" && <Attendance key="apply" mode="apply" me={me} />}
         {tab === "reading" && <ReadingRoom />}
+        {tab === "stats" && <Attendance key="stats" mode="stats" me={me} />}
         {tab === "lessonbyb" && <Attendance key="lesson" mode="lesson" me={me} />}
         {tab === "officelog" && isOffice && <OfficeLog me={me} />}
         {tab === "link" && <LinkInfo />}
@@ -2296,7 +2298,7 @@ function Attendance({ mode = "attendance", me }) {
 
   return (
     <div>
-      <Panel title={mode === "lesson" ? "강습 등록·취소 (바이비)" : isApply ? "신청서 생성 (전월 창구 명단 → 신청서 엑셀)" : "출석부 생성 (바이비 명단 → 엑셀)"}>
+      <Panel title={mode === "stats" ? "월간 이용 통계 (1~4단지 강좌 수강생 · 시설 이용자)" : mode === "lesson" ? "강습 등록·취소 (바이비)" : isApply ? "신청서 생성 (전월 창구 명단 → 신청서 엑셀)" : "출석부 생성 (바이비 명단 → 엑셀)"}>
         {step === "login" && (
           <div className="grid sm:grid-cols-3 gap-2 items-end">
             <L label="바이비 아이디"><input className={attInput} value={user} onChange={(e) => setUser(e.target.value)} /></L>
@@ -2317,13 +2319,19 @@ function Attendance({ mode = "attendance", me }) {
             <button className="text-sm text-slate-500 underline" onClick={() => { setStep("login"); setPending(null); }}>처음부터</button>
           </div>
         )}
+        {step === "ready" && mode === "stats" && (
+          <>
+            <p className="text-xs text-emerald-700 flex items-center gap-1 mb-3"><CheckCircle2 size={14} /> 바이비 로그인됨 ({user})</p>
+            <StatsPanel call={async (body) => { const j = await attCall({ ...body, auth: BYB_AUTH }); if (j.auth) setAuth(j.auth); return j; }} />
+          </>
+        )}
         {step === "ready" && mode === "lesson" && (
           <>
             <p className="text-xs text-emerald-700 flex items-center gap-1 mb-3"><CheckCircle2 size={14} /> 바이비 로그인됨 ({user})</p>
             <LessonPanel me={me} call={async (body) => { const j = await attCall({ ...body, auth: BYB_AUTH }); if (j.auth) setAuth(j.auth); return j; }} />
           </>
         )}
-        {step === "ready" && mode !== "lesson" && (
+        {step === "ready" && mode !== "lesson" && mode !== "stats" && (
           <div className="space-y-3">
             <p className="text-xs text-emerald-700 flex items-center gap-1"><CheckCircle2 size={14} /> 바이비 로그인됨 ({user}) — 이 창을 닫으면 로그인 정보는 사라져요.</p>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -2861,6 +2869,97 @@ function ReadingRoom() {
           {log.map((l, i) => <p key={i} className={l.startsWith("⚠") ? "text-amber-600" : "text-slate-600"}>{l}</p>)}
         </div>
       )}
+    </div>
+  );
+}
+
+/* ═══════════ 월간 이용 통계 ═══════════
+   강좌: 수강기간이 해당 월인 확정 수강생 (강좌명이 '플그'로 시작하면 제외)
+   시설: 이용기간이 해당 월인 확정 예약 (체육관·스크린테니스·스크린골프·골프백보관함·실내골프장·탁구장·게스트·악기연습) */
+function StatsPanel({ call }) {
+  const prev = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1);
+  const [year, setYear] = useState(prev.getFullYear());
+  const [month, setMonth] = useState(prev.getMonth() + 1);
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const [res, setRes] = useState({});   // kind → [{title, n, people}]
+
+  const run = async (kind) => {
+    setErr(""); setBusy(kind);
+    const acc = {}; let page = 0, total = 0;
+    try {
+      for (let i = 0; i < 100; i++) {
+        const j = await call({ action: "stats", kind, year, month, page, pages: 10 });
+        for (const [t, g] of Object.entries(j.groups || {})) {
+          const a = (acc[t] = acc[t] || { n: 0, uids: new Set(), chan: g.chan });
+          a.n += g.n; g.uids.forEach((u) => a.uids.add(u));
+        }
+        total += j.rows || 0; page = j.next;
+        setRes((r) => ({ ...r, [kind]: { loading: `${page * 100}건 확인 중…`, list: [] } }));
+        if (j.done) break;
+      }
+      const list = Object.entries(acc).map(([title, a]) => ({ title, chan: a.chan, n: a.n, people: a.uids.size }))
+        .sort((x, y) => x.title.localeCompare(y.title, "ko"));
+      setRes((r) => ({ ...r, [kind]: { list, total } }));
+    } catch (e) { setErr(e.message); setRes((r) => ({ ...r, [kind]: null })); }
+    finally { setBusy(""); }
+  };
+
+  const excel = () => {
+    const wb = XLSX.utils.book_new();
+    const add = (kind, name, head) => {
+      const d = res[kind]?.list; if (!d?.length) return;
+      const aoa = [head, ...d.map((x) => (kind === "klass" ? [x.title, x.people] : [x.title, x.chan, x.n, x.people]))];
+      aoa.push(kind === "klass" ? ["합계", d.reduce((s, x) => s + x.people, 0)]
+        : ["합계", "", d.reduce((s, x) => s + x.n, 0), d.reduce((s, x) => s + x.people, 0)]);
+      const ws = XLSX.utils.aoa_to_sheet(aoa); ws["!cols"] = [{ wch: 48 }, { wch: 18 }, { wch: 10 }, { wch: 10 }];
+      XLSX.utils.book_append_sheet(wb, ws, name);
+    };
+    add("klass", "강좌별 수강생", ["강좌명", "수강생 수"]);
+    add("facility", "시설별 이용자", ["예약상품명", "채널명", "이용 건수", "이용자 수(중복 제외)"]);
+    XLSX.writeFile(wb, `${year}년 ${month}월 이용 통계.xlsx`);
+  };
+
+  const box = "rounded-lg border border-slate-200 px-2.5 py-2 text-sm";
+  const Table = ({ kind }) => {
+    const r = res[kind]; if (!r) return null;
+    if (r.loading) return <p className="text-sm text-slate-500 flex items-center gap-1"><Loader2 size={14} className="animate-spin" /> {r.loading}</p>;
+    const sum = (k) => r.list.reduce((s, x) => s + x[k], 0);
+    return (
+      <div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead><tr className="text-left text-slate-500 border-b">
+          <th className="py-1.5">{kind === "klass" ? "강좌명" : "예약상품명"}</th>
+          {kind === "facility" && <th className="text-right">이용 건수</th>}
+          <th className="text-right">{kind === "klass" ? "수강생" : "이용자(중복제외)"}</th></tr></thead>
+        <tbody>
+          {r.list.map((x) => <tr key={x.title} className="border-b border-slate-100"><td className="py-1">{x.title}</td>
+            {kind === "facility" && <td className="text-right">{x.n.toLocaleString()}</td>}
+            <td className="text-right">{x.people.toLocaleString()}</td></tr>)}
+          <tr className="font-semibold"><td className="py-1.5">합계 ({r.list.length}개)</td>
+            {kind === "facility" && <td className="text-right">{sum("n").toLocaleString()}</td>}
+            <td className="text-right">{sum("people").toLocaleString()}</td></tr>
+        </tbody></table></div>
+    );
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <input type="number" className={`${box} w-24`} value={year} onChange={(e) => setYear(+e.target.value)} />
+        <select className={box} value={month} onChange={(e) => setMonth(+e.target.value)}>
+          {Array.from({ length: 12 }, (_, i) => <option key={i} value={i + 1}>{i + 1}월</option>)}
+        </select>
+        <button disabled={!!busy} onClick={() => run("klass")} className="rounded-lg bg-emerald-600 text-white text-sm px-3 py-2 disabled:opacity-40">
+          {busy === "klass" ? "조회 중…" : "강좌별 수강생 조회"}</button>
+        <button disabled={!!busy} onClick={() => run("facility")} className="rounded-lg bg-sky-600 text-white text-sm px-3 py-2 disabled:opacity-40">
+          {busy === "facility" ? "조회 중…" : "시설별 이용자 조회"}</button>
+        <button disabled={!!busy || !(res.klass?.list?.length || res.facility?.list?.length)} onClick={excel}
+          className="rounded-lg border border-slate-200 text-sm px-3 py-2 flex items-center gap-1 disabled:opacity-40"><Download size={14} /> 엑셀</button>
+      </div>
+      <p className="text-xs text-slate-400">강좌: 수강기간 기준 확정 수강생, '플그'로 시작하는 강좌 제외 · 시설: 이용기간 기준 확정 예약(취소 제외), 체육관·스크린테니스·스크린골프·골프백보관함·실내골프장·탁구장·게스트·악기연습</p>
+      {err && <p className="text-sm text-rose-600">{err}</p>}
+      {res.klass && <div><p className="text-sm font-semibold mb-1">강좌별 수강생</p><Table kind="klass" /></div>}
+      {res.facility && <div><p className="text-sm font-semibold mb-1">시설별 이용자</p><Table kind="facility" /></div>}
     </div>
   );
 }

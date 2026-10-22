@@ -809,6 +809,55 @@ def build_apply_zip(data, year, month):
 
 
 # ───────────── HTTP 핸들러 ─────────────
+# ───────────── 9월 통계: 강좌별 수강생 수 / 시설별 이용자 수 ─────────────
+FAC_KEYS = ["체육관", "스크린테니스", "스크린골프", "골프백보관함", "실내골프장", "탁구장", "게스트", "악기연습"]
+
+
+def _s(*vals):
+    return " ".join(str(v) for v in vals if isinstance(v, str))
+
+
+def scan_stats(auth, kind, y, m, page, pages):
+    last = calendar.monthrange(y, m)[1]
+    groups, rows, pg, done = {}, 0, page, False
+    while pg < page + pages:
+        q = {"page": pg, "size": 100, "latestRevision.status": "CONFIRMED", "sort": "createdAt,asc",
+             "startOffsetDateTime": f"{y}-{m:02d}-01T00:00:00+09:00",
+             "endOffsetDateTime": f"{y}-{m:02d}-{last}T23:59:59+09:00"}
+        if kind == "klass":
+            q["scenarioType"] = "KLASS"
+        its = items_of(api(auth, "GET", f"/community/manager/v1/reservations?{urllib.parse.urlencode(q)}"))
+        for it in its:
+            rv = it.get("reservation") if isinstance(it.get("reservation"), dict) else it
+            w = rv.get("window") or {}
+            title = (w.get("title") or rv.get("windowTitle") or find_key(rv, ["windowTitle", "productName", "title"]) or "").strip()
+            st = (rv.get("latestRevision") or {}).get("status") or rv.get("status")
+            if st and st != "CONFIRMED":
+                continue
+            ch = w.get("channel") if isinstance(w.get("channel"), dict) else {}
+            chan = _s(ch.get("name"), ch.get("title"), w.get("channelName"), rv.get("channelName"))
+            scen = str(rv.get("scenarioType") or w.get("scenarioType") or "")
+            if kind == "klass":
+                if title.startswith("플그"):
+                    continue
+            else:
+                if scen == "KLASS" or not any(k in f"{chan} {title}" for k in FAC_KEYS):
+                    continue
+            rows += 1
+            uid = find_key(rv, ID_KEYS) or _s((rv.get("reservationCustomer") or {}).get("dong"),
+                                              (rv.get("reservationCustomer") or {}).get("ho"),
+                                              (rv.get("reservationCustomer") or {}).get("name"))
+            g = groups.setdefault(title or "(이름 없음)", {"n": 0, "uids": [], "chan": chan.strip()})
+            g["n"] += 1
+            if uid and uid not in g["uids"]:
+                g["uids"].append(uid)
+        pg += 1
+        if len(its) < 100:
+            done = True
+            break
+    return {"groups": groups, "rows": rows, "next": pg, "done": done}
+
+
 def make_auth(tok, user):
     a, kind = pick_auth(tok)
     return encode_auth({"a": a, "k": kind, "u": user, "r": tok.get("refresh_token"), "t": tok.get("access_token")})
@@ -878,6 +927,10 @@ def handle(b):
         return {"zip": base64.b64encode(z).decode(), "log": LOG[-200:]}
 
     auth = decode_auth(b.get("auth", ""))
+
+    if act == "stats":   # kind = klass(강좌) / facility(시설), 10페이지(1,000건)씩 끊어서 조회
+        return scan_stats(auth, b.get("kind"), int(b["year"]), int(b["month"]),
+                          int(b.get("page") or 0), min(int(b.get("pages") or 10), 15))
 
     if act == "windows":
         return {"windows": list_windows(auth, b.get("keywords"), b.get("year"), b.get("month"))}
