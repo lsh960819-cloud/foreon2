@@ -2891,6 +2891,19 @@ function StatsPanel({ call }) {
     const last = new Date(year, month, 0).getDate();
     const days = kind === "facility" ? Array.from({ length: last }, (_, i) => i + 1) : [null];
     try {
+      if (kind === "klass") {   // 강좌: 창구 목록 → 창구별 수강생 수 (15개씩)
+        const { windows = [] } = await call({ action: "stats_windows" });
+        const list = [];
+        for (let i = 0; i < windows.length; i += 15) {
+          setRes((r) => ({ ...r, klass: { loading: `강좌 ${i}/${windows.length}개 확인 중…`, list: [] } }));
+          const part = windows.slice(i, i + 15);
+          const { counts = {} } = await call({ action: "stats_count", year, month, windows: part });
+          part.forEach((w) => counts[w.id] && list.push({ title: w.name, chan: "", n: counts[w.id], people: counts[w.id] }));
+        }
+        list.sort((x, y) => x.title.localeCompare(y.title, "ko"));
+        setRes((r) => ({ ...r, klass: { list } }));
+        return;
+      }
       for (const day of days) {
         let page = 0;
         for (let i = 0; i < 200; i++) {

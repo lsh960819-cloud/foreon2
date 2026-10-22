@@ -872,6 +872,31 @@ def scan_stats(auth, kind, y, m, page, pages, day=None, size=100):
     return {"groups": groups, "rows": rows, "next": pg, "done": done}
 
 
+
+def klass_windows_all(auth):
+    out, seen = [], set()
+    _list_windows_kw(auth, get_channels(auth), "", out, seen)
+    return [{"id": w["id"], "name": w["name"]} for w in out if not w["name"].startswith("플그")]
+
+
+def count_window(auth, wid, y, m):
+    last = calendar.monthrange(y, m)[1]
+    uids, pg = set(), 0
+    while pg < 20:
+        q = urllib.parse.urlencode({
+            "page": pg, "size": 100, "scenarioType": "KLASS", "latestRevision.status": "CONFIRMED",
+            "sort": "createdAt,asc", "window.id": wid,
+            "startOffsetDateTime": f"{y}-{m:02d}-01T00:00:00+09:00",
+            "endOffsetDateTime": f"{y}-{m:02d}-{last}T23:59:59+09:00"})
+        its = items_of(_get_retry(auth, f"/community/manager/v1/reservations?{q}"))
+        for it in its:
+            uids.add(find_key(it, ID_KEYS) or str(it.get("reservationId") or it.get("id")))
+        if len(its) < 100:
+            break
+        pg += 1
+    return len(uids)
+
+
 def make_auth(tok, user):
     a, kind = pick_auth(tok)
     return encode_auth({"a": a, "k": kind, "u": user, "r": tok.get("refresh_token"), "t": tok.get("access_token")})
@@ -941,6 +966,13 @@ def handle(b):
         return {"zip": base64.b64encode(z).decode(), "log": LOG[-200:]}
 
     auth = decode_auth(b.get("auth", ""))
+
+    if act == "stats_windows":   # 1~4단지 전체 강좌 창구 ('플그' 제외)
+        return {"windows": klass_windows_all(auth)}
+
+    if act == "stats_count":     # 창구별 해당 월 확정 수강생 수
+        y, m = int(b["year"]), int(b["month"])
+        return {"counts": {w["id"]: count_window(auth, w["id"], y, m) for w in b["windows"][:15]}}
 
     if act == "stats":   # kind = klass(강좌) / facility(시설), 10페이지(1,000건)씩 끊어서 조회
         return scan_stats(auth, b.get("kind"), int(b["year"]), int(b["month"]),
