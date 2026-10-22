@@ -931,9 +931,8 @@ def klass_v3_scan(auth, y, m, page, pages):
 def facility_v3_scan(auth, y, m, page, pages):
     """바이비 [커뮤니티시설 예약자 현황] 화면과 같은 조회 (POST v3/reservations, 이용기간·확정만)"""
     last = calendar.monthrange(y, m)[1]
-    body = {"channelIds": get_channels(auth), "periodType": "USAGE", "startDate": f"{y}-{m:02d}-01",
-            "endDate": f"{y}-{m:02d}-{last:02d}", "dong": "", "ho": "", "states": ["CONFIRMED"],
-            "windowTitle": "", "name": ""}
+    body = {"channelIds": get_channels(auth), "statuses": ["CONFIRMED"], "zoneId": "Asia/Seoul",
+            "usePeriod": {"startDate": f"{y}-{m:02d}-01", "endDate": f"{y}-{m:02d}-{last:02d}"}}
     groups, pg, done, total, its = {}, page, False, None, []
     while pg < page + pages:
         js = api(auth, "POST", f"/community/manager/v3/reservations?page={pg}&size=100", body)
