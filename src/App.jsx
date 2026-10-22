@@ -2918,6 +2918,21 @@ function StatsPanel({ call }) {
         setRes((r) => ({ ...r, klass: { list } }));
         return;
       }
+      try {   // 시설: 바이비 [예약자 현황]과 같은 조회 → 안 되면 하루씩 조회
+        let page = 0, tot = null, got = false;
+        for (let i = 0; i < 600; i++) {
+          const j = await call({ action: "stats_fac_v3", year, month, page, pages: 5 });
+          if (j.total != null) tot = j.total;
+          for (const [t, g] of Object.entries(j.groups || {})) {
+            const a = (acc[t] = acc[t] || { n: 0, uids: new Set(), chan: g.chan });
+            a.n += g.n; g.uids.forEach((u) => a.uids.add(u)); got = true;
+          }
+          page = j.next;
+          setRes((r) => ({ ...r, facility: { loading: `${Math.min(page * 100, tot ?? page * 100).toLocaleString()}${tot ? ` / ${tot.toLocaleString()}` : ""}건 확인 중…`, list: [] } }));
+          if (j.done) break;
+        }
+        if (got) days.length = 0;
+      } catch (e) { console.warn("v3 시설 조회 실패, 하루씩 조회로 전환", e); for (const k in acc) delete acc[k]; }
       for (const day of days) {
         let page = 0;
         for (let i = 0; i < 200; i++) {

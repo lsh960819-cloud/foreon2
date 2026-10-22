@@ -927,6 +927,45 @@ def klass_v3_scan(auth, y, m, page, pages):
             "sample": sorted(its[0].keys()) if page == 0 and its and isinstance(its[0], dict) else None}
 
 
+
+def facility_v3_scan(auth, y, m, page, pages):
+    """바이비 [커뮤니티시설 예약자 현황] 화면과 같은 조회 (POST v3/reservations, 이용기간·확정만)"""
+    last = calendar.monthrange(y, m)[1]
+    body = {"channelIds": get_channels(auth), "periodType": "USAGE", "startDate": f"{y}-{m:02d}-01",
+            "endDate": f"{y}-{m:02d}-{last:02d}", "dong": "", "ho": "", "states": ["CONFIRMED"],
+            "windowTitle": "", "name": ""}
+    groups, pg, done, total, its = {}, page, False, None, []
+    while pg < page + pages:
+        js = api(auth, "POST", f"/community/manager/v3/reservations?page={pg}&size=100", body)
+        if isinstance(js, dict):
+            total = js.get("totalElements", total)
+        its = items_of(js)
+        for it in its:
+            rv = it.get("reservation") if isinstance(it.get("reservation"), dict) else it
+            w = rv.get("window") if isinstance(rv.get("window"), dict) else {}
+            st = (rv.get("latestRevision") or {}).get("status") or rv.get("status") or rv.get("state")
+            if st and str(st).upper() not in ("CONFIRMED", "확정"):
+                continue
+            title = (w.get("title") or rv.get("windowTitle") or rv.get("productName")
+                     or find_key(rv, ["windowTitle", "productName", "title"]) or "").strip()
+            ch = w.get("channel") if isinstance(w.get("channel"), dict) else {}
+            chan = _s(ch.get("name"), ch.get("title"), w.get("channelName"), rv.get("channelName"),
+                      find_key(rv, ["channelName"]) or "").strip()
+            if not any(k in f"{chan} {title}" for k in FAC_KEYS):
+                continue
+            rc = rv.get("reservationCustomer") or rv.get("customer") or {}
+            uid = find_key(rv, ID_KEYS) or _s(rc.get("dong"), rc.get("ho"), rc.get("name"), rv.get("name"), rv.get("phoneNumber"))
+            g = groups.setdefault(title or "(이름 없음)", {"n": 0, "uids": [], "chan": chan})
+            g["n"] += 1
+            if uid and uid not in g["uids"]:
+                g["uids"].append(uid)
+        pg += 1
+        if len(its) < 100:
+            done = True
+            break
+    return {"groups": groups, "next": pg, "done": done, "total": total}
+
+
 def make_auth(tok, user):
     a, kind = pick_auth(tok)
     return encode_auth({"a": a, "k": kind, "u": user, "r": tok.get("refresh_token"), "t": tok.get("access_token")})
@@ -999,6 +1038,9 @@ def handle(b):
 
     if act == "stats_v3":
         return klass_v3_scan(auth, int(b["year"]), int(b["month"]), int(b.get("page") or 0), min(int(b.get("pages") or 5), 10))
+
+    if act == "stats_fac_v3":
+        return facility_v3_scan(auth, int(b["year"]), int(b["month"]), int(b.get("page") or 0), min(int(b.get("pages") or 5), 10))
 
     if act == "stats_windows":   # 1~4단지 전체 강좌 창구 ('플그' 제외)
         return {"windows": klass_windows_all(auth)}
