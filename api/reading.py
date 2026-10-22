@@ -34,7 +34,6 @@ def fill_apply(ws, rows, log, kind):
         if ws.cell(r, 5).value:
             log.append(f"⚠ {kind}: 좌석 {p['seat']}번 중복 — {p.get('name')} 제외")
             continue
-        ws.cell(r, 2).value = _d(p.get("date"))
         ws.cell(r, 3).value, ws.cell(r, 4).value = p.get("dong"), p.get("ho")
         ws.cell(r, 5).value, ws.cell(r, 6).value = p.get("name"), p.get("phone")
     log.append(f"{kind} 신청서: {len(rows)}명")
@@ -46,7 +45,6 @@ def fill_wait(ws, rows, log, kind):
     if len(rows) > len(slots):
         log.append(f"⚠ {kind}: 대기자 {len(rows)}명 중 칸이 {len(slots)}개라 뒤 {len(rows) - len(slots)}명 제외")
     for r, p in zip(slots, rows):
-        ws.cell(r, 2).value = _d(p.get("date"))
         ws.cell(r, 3).value, ws.cell(r, 4).value = p.get("dong"), p.get("ho")
         ws.cell(r, 5).value, ws.cell(r, 6).value = p.get("name"), p.get("phone")
     log.append(f"{kind} 대기자: {min(len(rows), len(slots))}명")
