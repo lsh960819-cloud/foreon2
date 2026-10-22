@@ -2905,7 +2905,7 @@ function StatsPanel({ call }) {
           const list = Object.entries(acc2).map(([title, n]) => ({ title, chan: "", n, people: n }))
             .sort((x, y) => x.title.localeCompare(y.title, "ko"));
           if (list.length) { setRes((r) => ({ ...r, klass: { list } })); return; }
-        } catch (e) { console.warn("v3 조회 실패, 창구별 조회로 전환", e); }
+        } catch (e) { throw new Error(`강좌 조회 실패: ${e.message}`); }
         const { windows = [] } = await call({ action: "stats_windows" });
         const list = [];
         for (let i = 0; i < windows.length; i += 15) {
@@ -2932,7 +2932,7 @@ function StatsPanel({ call }) {
           if (j.done) break;
         }
         if (got) days.length = 0;
-      } catch (e) { console.warn("v3 시설 조회 실패, 하루씩 조회로 전환", e); for (const k in acc) delete acc[k]; }
+      } catch (e) { throw new Error(`시설 조회 실패: ${e.message}`); }
       for (const day of days) {
         let page = 0;
         for (let i = 0; i < 200; i++) {

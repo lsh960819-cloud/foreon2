@@ -874,9 +874,13 @@ def scan_stats(auth, kind, y, m, page, pages, day=None, size=100):
 
 
 
+def all_channels(auth):   # 통계용: 1~4단지 채널이 빠지지 않도록 바이비 화면의 전체 채널 목록과 합침
+    return list(dict.fromkeys(get_channels(auth) + FALLBACK_CHANNELS))
+
+
 def klass_windows_all(auth):
     out, seen = [], set()
-    _list_windows_kw(auth, get_channels(auth), "", out, seen)
+    _list_windows_kw(auth, all_channels(auth), "", out, seen)
     return [{"id": w["id"], "name": w["name"]} for w in out if not w["name"].startswith("플그")]
 
 
@@ -904,7 +908,7 @@ def klass_v3_scan(auth, y, m, page, pages):
     last = calendar.monthrange(y, m)[1]
     start = (datetime.datetime(y, m, 1) - datetime.timedelta(hours=9)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     end = (datetime.datetime(y, m, last) - datetime.timedelta(hours=9)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-    body = {"channelIds": get_channels(auth), "periodSearchType": "KLASS", "startDate": start, "endDate": end,
+    body = {"channelIds": all_channels(auth), "periodSearchType": "KLASS", "startDate": start, "endDate": end,
             "dong": "", "ho": "", "productName": "", "instructorName": "", "name": ""}
     groups, pg, done, total = {}, page, False, None
     while pg < page + pages:
@@ -931,7 +935,7 @@ def klass_v3_scan(auth, y, m, page, pages):
 def facility_v3_scan(auth, y, m, page, pages):
     """바이비 [커뮤니티시설 예약자 현황] 화면과 같은 조회 (POST v3/reservations, 이용기간·확정만)"""
     last = calendar.monthrange(y, m)[1]
-    body = {"channelIds": get_channels(auth), "statuses": ["CONFIRMED"], "zoneId": "Asia/Seoul",
+    body = {"channelIds": all_channels(auth), "statuses": ["CONFIRMED"], "zoneId": "Asia/Seoul",
             "usePeriod": {"startDate": f"{y}-{m:02d}-01", "endDate": f"{y}-{m:02d}-{last:02d}"}}
     groups, pg, done, total, its = {}, page, False, None, []
     while pg < page + pages:
