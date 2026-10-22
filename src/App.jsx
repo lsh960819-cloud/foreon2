@@ -361,14 +361,9 @@ export default function App() {
 
   const tabs = [
     { id: "home", label: "홈", icon: HomeIcon },
-    { id: "worklog", label: "업무일지", icon: ClipboardList },
-    { id: "search", label: "기록 검색", icon: Search },
-    { id: "lost", label: "분실물", icon: PackageSearch },
-    { id: "events", label: "주요 행사·일정", icon: CalendarDays },
-    ...(isAI ? [{ id: "worklogs", label: "작업 기록", icon: FileText }] : []),
-    { id: "files", label: "자료실", icon: FolderOpen },
     { id: "attendance", label: "출석부 생성", icon: CalendarCheck },
     { id: "apply", label: "신청서 생성", icon: FileText },
+    { id: "reading", label: "독서실 신청서·대기자", icon: FileText },
     { id: "lessonbyb", label: "강습 등록·취소", icon: GraduationCap },
     ...(isOffice ? [{ id: "officelog", label: "사무실 업무일지", icon: ClipboardList }] : []),
     { id: "link", label: "외부 연동", icon: ArrowLeftRight },
@@ -404,15 +399,9 @@ export default function App() {
         </div>
 
         {tab === "home" && <Home me={me} events={events} />}
-        {tab === "worklog" && <WorkLog me={me} complaints={complaints} setComplaints={setComplaints}
-          handovers={handovers} setHandovers={setHandovers} requests={requests} setRequests={setRequests} />}
-        {tab === "search" && <RecordSearch complaints={complaints} />}
-        {tab === "lost" && <Lost me={me} rows={lost} setRows={setLost} />}
-        {tab === "events" && <Events me={me} rows={events} setRows={setEvents} />}
-        {tab === "worklogs" && isAI && <WorkLogs me={me} />}
-        {tab === "files" && <SharedFiles me={me} />}
         {tab === "attendance" && <Attendance key="att" me={me} />}
         {tab === "apply" && <Attendance key="apply" mode="apply" me={me} />}
+        {tab === "reading" && <ReadingRoom />}
         {tab === "lessonbyb" && <Attendance key="lesson" mode="lesson" me={me} />}
         {tab === "officelog" && isOffice && <OfficeLog me={me} />}
         {tab === "link" && <LinkInfo />}
@@ -2721,4 +2710,150 @@ function Panel({ title, children }) { return <div className="bg-white rounded-2x
 function Stat({ label, value, accent }) {
   return <div className={`rounded-xl border p-3 ${accent ? "bg-emerald-600 border-emerald-600 text-white" : "bg-white border-slate-200"}`}>
     <p className={`text-xs ${accent ? "text-emerald-100" : "text-slate-500"}`}>{label}</p><p className="text-base font-bold mt-0.5">{value}</p></div>;
+}
+
+/* ═══════════ 독서실 신청서 · 대기자 생성 ═══════════
+   ① 구독현황(당첨자, 좌석번호 있음) → 신청서 시트에 좌석번호 자리에 채움
+   ② 추첨_지원자_리스트(당첨·탈락) → '탈락'만 대기순번 순서대로 대기자 시트에 채움 */
+const RR_KINDS = ["개인", "남자일반", "여자일반"];
+const rrNum = (s) => String(s ?? "").replace(/[^0-9]/g, "");
+const rrPhone = (s) => { const d = rrNum(s); return d.length === 11 ? `${d.slice(0, 3)}-${d.slice(3, 7)}-${d.slice(7)}` : String(s ?? ""); };
+const rrKindOf = (text, genders = []) => {
+  if (/개인/.test(text)) return "개인";
+  if (/남자|남성/.test(text)) return "남자일반";
+  if (/여자|여성/.test(text)) return "여자일반";
+  const g = new Set(genders.filter(Boolean));
+  if (g.size === 1) return g.has("남") ? "남자일반" : "여자일반";
+  return "";
+};
+
+async function rrParse(file) {
+  const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+  const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "", raw: false });
+  const hi = aoa.findIndex((r) => r.includes("회원명"));
+  if (hi < 0) throw new Error(`${file.name}: '회원명' 머리글을 못 찾았어요.`);
+  const H = aoa[hi]; const col = (n) => H.indexOf(n);
+  const body = aoa.slice(hi + 1).filter((r) => r[col("회원명")]);
+  const title = String(aoa[0]?.[0] || "");
+  const base = (r) => ({ dong: rrNum(r[col("동")]), ho: rrNum(r[col("호")]), name: String(r[col("회원명")]).trim() });
+  if (col("시설/기기") >= 0) {   // 구독현황 → 신청서
+    const rows = body.map((r) => ({ ...base(r), phone: rrPhone(r[col("연락처")]),
+      seat: Number(String(r[col("시설/기기")]).split("/").pop().replace(/\D/g, "")) || 0,
+      date: String(r[col("구독일시")]).slice(0, 10) }));
+    const m = title.match(/(\d{4})-(\d{2})-\d{2}\s*~/);
+    return { type: "apply", rows, kind: rrKindOf(file.name + title), period: m ? { y: +m[1], m: +m[2] } : null };
+  }
+  if (col("대기순번") >= 0) {     // 추첨 지원자 리스트 → 대기자
+    const rows = body.filter((r) => String(r[col("상태")]).trim() === "탈락" && rrNum(r[col("대기순번")]))
+      .map((r) => ({ ...base(r), phone: rrPhone(r[col("전화 번호")]), order: Number(rrNum(r[col("대기순번")])),
+        date: String(r[col("추첨생성일시")]).slice(0, 10) }))
+      .sort((a, b) => a.order - b.order);
+    return { type: "wait", rows, kind: rrKindOf(file.name, body.map((r) => String(r[col("성별")]).trim())) };
+  }
+  throw new Error(`${file.name}: 구독현황/추첨 지원자 리스트 형식이 아니에요.`);
+}
+
+function ReadingRoom() {
+  const now = new Date();
+  let defStart = now.getMonth() + 2, defYear = now.getFullYear();   // 다음 달부터 시작하는 홀수 월 묶음
+  if (defStart % 2 === 0) defStart += 1;
+  if (defStart > 12) { defStart -= 12; defYear += 1; }
+  const [year, setYear] = useState(defYear);
+  const [start, setStart] = useState(defStart);
+  const [files, setFiles] = useState([]);   // {name, type, kind, rows}
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [log, setLog] = useState([]);
+
+  const add = async (list) => {
+    setErr("");
+    for (const f of list) {
+      try {
+        const p = await rrParse(f);
+        if (p.period) { setYear(p.period.y); setStart(p.period.m); }
+        setFiles((xs) => [...xs, { name: f.name, ...p }]);
+      } catch (e) { setErr(e.message); }
+    }
+  };
+  const setKind = (i, kind) => setFiles((xs) => xs.map((x, j) => (j === i ? { ...x, kind } : x)));
+
+  const build = async () => {
+    setErr(""); setLog([]);
+    if (files.some((f) => !f.kind)) return setErr("구분(개인/남자일반/여자일반)을 모두 골라 주세요.");
+    const sheets = {};
+    for (const f of files) {
+      sheets[f.kind] = sheets[f.kind] || {};
+      sheets[f.kind][f.type] = [...(sheets[f.kind][f.type] || []), ...f.rows];
+    }
+    setBusy(true);
+    try {
+      const r = await fetch("/api/reading", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ year, start, sheets }) });
+      const j = await r.json().catch(() => ({ error: `서버 응답 오류 (${r.status})` }));
+      if (!r.ok || j.error) throw new Error(j.error || `오류 ${r.status}`);
+      const bytes = Uint8Array.from(atob(j.file), (c) => c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+      const a = document.createElement("a");
+      a.href = url; a.download = `2단지 독서실 ${start}~${start + 1}월 신청서·대기자.xlsx`; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      setLog(j.log || []);
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  };
+
+  const inp = "rounded-lg border border-slate-200 px-2.5 py-2 text-sm";
+  return (
+    <div>
+      <Panel title="① 사용 기간">
+        <div className="flex items-center gap-2 text-sm">
+          <select value={year} onChange={(e) => setYear(+e.target.value)} className={inp}>
+            {[now.getFullYear(), now.getFullYear() + 1].map((y) => <option key={y} value={y}>{y}년</option>)}
+          </select>
+          <select value={start} onChange={(e) => setStart(+e.target.value)} className={inp}>
+            {[1, 3, 5, 7, 9, 11].map((m) => <option key={m} value={m}>{m}~{m + 1}월</option>)}
+          </select>
+          <span className="text-xs text-slate-400">구독현황 파일을 올리면 자동으로 맞춰져요</span>
+        </div>
+      </Panel>
+      <Panel title="② 바이비 엑셀 올리기">
+        <p className="text-xs text-slate-500 mb-2 leading-relaxed">
+          · <b>구독현황</b>(당첨자·좌석번호) → 신청서에 좌석번호 자리대로<br />
+          · <b>추첨 지원자 리스트</b>(당첨·탈락) → 탈락자만 대기순번 순서대로 대기자에<br />
+          개인/남자일반/여자일반 파일을 여러 개 한 번에 올려도 돼요.
+        </p>
+        <label className="flex items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-200 py-5 text-sm text-slate-500 cursor-pointer hover:bg-slate-50">
+          <Upload size={16} /> 엑셀 파일 선택
+          <input type="file" accept=".xlsx,.xls" multiple className="hidden"
+            onChange={(e) => { add([...e.target.files]); e.target.value = ""; }} />
+        </label>
+        {files.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {files.map((f, i) => (
+              <div key={i} className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm">
+                <span className={`text-[11px] font-semibold rounded px-1.5 py-0.5 ${f.type === "apply" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                  {f.type === "apply" ? "신청서" : "대기자"}
+                </span>
+                <span className="flex-1 truncate">{f.name}</span>
+                <span className="text-xs text-slate-500">{f.rows.length}명</span>
+                <select value={f.kind} onChange={(e) => setKind(i, e.target.value)} className={`${inp} py-1 ${f.kind ? "" : "border-rose-300"}`}>
+                  <option value="">구분 선택</option>
+                  {RR_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
+                </select>
+                <button onClick={() => setFiles((xs) => xs.filter((_, j) => j !== i))} className="text-slate-400 hover:text-rose-500"><X size={15} /></button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Panel>
+      {err && <p className="text-sm text-rose-600 mb-3">{err}</p>}
+      <button onClick={build} disabled={busy || !files.length}
+        className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-600 text-white font-medium py-3 disabled:opacity-40">
+        {busy ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />} 신청서·대기자 엑셀 만들기
+      </button>
+      {log.length > 0 && (
+        <div className="mt-3 rounded-xl bg-white border border-slate-200 p-3 text-sm space-y-1">
+          {log.map((l, i) => <p key={i} className={l.startsWith("⚠") ? "text-amber-600" : "text-slate-600"}>{l}</p>)}
+        </div>
+      )}
+    </div>
+  );
 }

@@ -3,6 +3,10 @@
     "api/attendance.py": {
       "maxDuration": 60,
       "includeFiles": "api/_templates/**"
+    },
+    "api/reading.py": {
+      "maxDuration": 30,
+      "includeFiles": "api/_templates_reading/**"
     }
   }
 }
