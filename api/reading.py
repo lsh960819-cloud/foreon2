@@ -6,6 +6,7 @@ import openpyxl
 
 TPL = Path(__file__).resolve().parent / "_templates_reading" / "독서실.xlsx"
 KINDS = ["개인", "남자일반", "여자일반"]
+DAILY = {"남자일반": {12, 31, 32, 33, 34}, "여자일반": {11, 12, 27, 28, 29}}   # 일일석 — 월권 자리 아님
 
 
 def _d(s):
@@ -27,6 +28,9 @@ def retitle(ws, y, sm):
 def fill_apply(ws, rows, log, kind):
     seat_row = {ws.cell(r, 1).value: r for r in range(11, ws.max_row + 1) if isinstance(ws.cell(r, 1).value, int)}
     for p in sorted(rows, key=lambda p: int(p.get("seat") or 0)):
+        if int(p.get("seat") or 0) in DAILY.get(kind, ()):
+            log.append(f"⚠ {kind}: 좌석 {p['seat']}번은 일일석이라 제외 — {p.get('name')}")
+            continue
         r = seat_row.get(int(p.get("seat") or 0))
         if not r:
             log.append(f"⚠ {kind}: 좌석 {p.get('seat')}번이 양식에 없어 제외 — {p.get('name')}")
