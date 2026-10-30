@@ -7,6 +7,9 @@
     "api/reading.py": {
       "maxDuration": 30,
       "includeFiles": "api/_templates_reading/**"
+    },
+    "api/swapclass.py": {
+      "maxDuration": 60
     }
   }
 }
