@@ -748,6 +748,39 @@ def normalize_notice(ws, samples):
         c.value = v
 
 
+def fix_print(ws):
+    """신청서 인쇄: 페이지(순번 머리글 기준 34~35행 단위)마다 수동 페이지 나누기 + 한 페이지에 딱 맞는 배율.
+    '한 페이지에 맞추기(fitToPage)'를 켜 두면 엑셀이 수동 나누기를 무시해서 다음 페이지 윗부분이 밀려 나옴 → 끔."""
+    from openpyxl.worksheet.pagebreak import Break, RowBreak
+    hdr = [r for r in range(1, ws.max_row + 1) if str(ws.cell(r, 2).value or "").strip() == "순번"]
+    if not hdr:
+        return
+    off = hdr[0] - 1                      # 페이지 첫 행 ~ 머리글 사이 행 수 (보통 13)
+    starts = [1] + [h - off for h in hdr[1:]]
+    last = max(apply_slots(ws) or [ws.max_row])
+    ends = [s - 1 for s in starts[1:]] + [last]
+    dflt = ws.sheet_format.defaultRowHeight or 15
+    rh = lambda r: ws.row_dimensions[r].height if ws.row_dimensions[r].height is not None else dflt
+    tall = max(sum(rh(r) for r in range(a, b + 1)) for a, b in zip(starts, ends))
+    wide = sum(((ws.column_dimensions[c].width or 8.43) * 9 + 5) * 0.75 for c in "ABCDEFGHIJ")   # 한글 글꼴·프린터 차이까지 넉넉히
+    pm, ps = ws.page_margins, ws.page_setup
+    paper = {9: (595, 842), 8: (842, 1191)}.get(int(ps.paperSize or 9), (595, 842))
+    pw, ph = (paper[1], paper[0]) if ps.orientation == "landscape" else paper
+    avail_h = ph - (pm.top + pm.bottom) * 72
+    avail_w = pw - (pm.left + pm.right) * 72
+    scale = int(min(avail_h / tall, avail_w / wide, 1.0) * 100) - 1   # 1% 여유
+    if ps.scale:
+        scale = min(scale, int(ps.scale))   # 양식에 맞춰 둔 배율보다 키우지 않음
+    ws.row_breaks = RowBreak()
+    for e in ends[:-1]:
+        ws.row_breaks.append(Break(id=e))
+    if ws.sheet_properties.pageSetUpPr is not None:
+        ws.sheet_properties.pageSetUpPr.fitToPage = False
+    ps.fitToHeight = ps.fitToWidth = None
+    ps.scale = max(40, scale)
+    ws.print_area = f"A1:J{last}"
+
+
 def fill_apply(ws, members):
     rows = apply_slots(ws)
     for r in rows:
@@ -798,6 +831,8 @@ def build_apply_workbook(tpl, classes, data, month, out_path, year=None):
         normalize_notice(ws, samples)
         fill_apply(ws, data[cname])
         made.append(ws)
+    for ws in made:
+        fix_print(ws)
     if year and apply_kind(Path(tpl).stem) == "수영":
         set_renew_notice(wb, year, month)
     for ws in list(wb.worksheets):
