@@ -401,7 +401,7 @@ export default function App() {
 
         {tab === "home" && <Home me={me} events={events} />}
         {tab === "attendance" && <Attendance key="att" me={me} />}
-        {tab === "apply" && <Attendance key="apply" mode="apply" me={me} />}
+        {tab === "apply" && <><Attendance key="apply" mode="apply" me={me} /><SwimClassChange me={me} /></>}
         {tab === "reading" && <ReadingRoom />}
         {tab === "stats" && <Attendance key="stats" mode="stats" me={me} />}
         {tab === "lessonbyb" && <Attendance key="lesson" mode="lesson" me={me} />}
@@ -2718,6 +2718,102 @@ function Panel({ title, children }) { return <div className="bg-white rounded-2x
 function Stat({ label, value, accent }) {
   return <div className={`rounded-xl border p-3 ${accent ? "bg-emerald-600 border-emerald-600 text-white" : "bg-white border-slate-200"}`}>
     <p className={`text-xs ${accent ? "text-emerald-100" : "text-slate-500"}`}>{label}</p><p className="text-base font-bold mt-0.5">{value}</p></div>;
+}
+
+/* ═══════════ 수영 반변경 → 신청서 반영 ═══════════
+   신청서(xlsx 또는 신청서 생성 zip) + 반변경 명단(양식) → 기존 반에서 빼고 위로 당김, 변경 반 맨 밑에 추가(비고 '반변경') */
+const fileB64 = (file) => new Promise((ok, no) => {
+  const r = new FileReader();
+  r.onload = () => ok(String(r.result).split(",")[1]);
+  r.onerror = () => no(new Error(`${file.name} 파일을 읽지 못했어요.`));
+  r.readAsDataURL(file);
+});
+
+function SwimClassChange({ me }) {
+  const [apply, setApply] = useState(null);
+  const [list, setList] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [res, setRes] = useState(null);
+
+  const run = async () => {
+    setErr(""); setRes(null); setBusy(true);
+    try {
+      const r = await fetch("/api/swapclass", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apply: await fileB64(apply), apply_name: apply.name, list: await fileB64(list) }) });
+      const j = await r.json().catch(() => ({ error: `서버 응답 오류 (${r.status})` }));
+      if (!r.ok || j.error) throw new Error(j.error || `오류 ${r.status}`);
+      const bytes = Uint8Array.from(atob(j.file), (c) => c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+      const a = document.createElement("a");
+      a.href = url; a.download = j.file_name; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      setRes(j);
+      const ok = (j.results || []).filter((x) => x.ok).length;
+      logWork({ kind: "신청서", action: "반변경", target: apply.name, seat: "수영",
+        member: `${ok}명 적용 · ${(j.results || []).length - ok}명 미적용`, by: me?.id || "?", at: nowLocal().replace("T", " ") });
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  };
+
+  const pick = (label, f, set, hint) => (
+    <label className="flex-1 flex flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-slate-200 py-4 px-2 text-sm text-slate-500 cursor-pointer hover:bg-slate-50 text-center">
+      <span className="flex items-center gap-1.5"><Upload size={15} /> {label}</span>
+      <span className={`text-xs truncate max-w-full ${f ? "text-emerald-700 font-medium" : "text-slate-400"}`}>{f ? f.name : hint}</span>
+      <input type="file" accept={label.startsWith("①") ? ".xlsx,.zip" : ".xlsx"} className="hidden"
+        onChange={(e) => { set(e.target.files[0] || null); setRes(null); e.target.value = ""; }} />
+    </label>
+  );
+
+  const bad = res ? res.results.filter((x) => !x.ok) : [];
+  return (
+    <Panel title="수영 반변경 → 신청서 반영">
+      <p className="text-xs text-slate-500 mb-2 leading-relaxed">
+        기존 반에서는 이름을 지우고 아래 명단을 위로 당기고, 변경 반에는 맨 밑에 추가하면서 비고에 <b>반변경</b>을 적어요.<br />
+        성함·동·호수가 신청서와 정확히 일치할 때만 옮기고, 애매한 건 바꾸지 않고 아래에 사유를 보여 줘요.
+        <a href="/수영_반변경_양식.xlsx" download className="ml-1 text-emerald-700 underline">반변경 양식 받기</a>
+      </p>
+      <div className="flex gap-2">
+        {pick("① 수영 신청서", apply, setApply, "xlsx 또는 신청서 생성 zip")}
+        {pick("② 반변경 명단", list, setList, "양식에 적은 xlsx")}
+      </div>
+      {err && <p className="text-sm text-rose-600 mt-3">{err}</p>}
+      <button onClick={run} disabled={busy || !apply || !list}
+        className="mt-3 w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-600 text-white font-medium py-3 disabled:opacity-40">
+        {busy ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />} 반변경 반영한 신청서 만들기
+      </button>
+      {res && (
+        <div className="mt-3 space-y-3 text-sm">
+          <p className="font-medium text-slate-700">{res.log[0]}</p>
+          {bad.length > 0 && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+              <p className="font-semibold text-amber-700 mb-1">미적용 {bad.length}명 — 양식을 고쳐서 다시 올려 주세요</p>
+              {bad.map((x, i) => <p key={i} className="text-amber-700">· {x.row}행 {x.name}({x.dong}-{x.ho}): {x.msg}</p>)}
+            </div>
+          )}
+          <div className="overflow-x-auto rounded-xl border border-slate-200">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50 text-slate-500"><tr>
+                <th className="px-2 py-1.5 text-left">성함</th><th className="px-2 py-1.5">동-호</th>
+                <th className="px-2 py-1.5 text-left">변경 전</th><th className="px-2 py-1.5 text-left">변경 후</th><th className="px-2 py-1.5">결과</th>
+              </tr></thead>
+              <tbody>{res.results.map((x, i) => (
+                <tr key={i} className="border-t border-slate-100">
+                  <td className="px-2 py-1.5">{x.name}</td><td className="px-2 py-1.5 text-center">{x.dong}-{x.ho}</td>
+                  <td className="px-2 py-1.5">{x.from}</td><td className="px-2 py-1.5">{x.to}</td>
+                  <td className={`px-2 py-1.5 text-center font-medium ${x.ok ? "text-emerald-600" : "text-amber-600"}`}>{x.ok ? "적용" : "미적용"}</td>
+                </tr>))}</tbody>
+            </table>
+          </div>
+          {res.over.length > 0 && (
+            <div className="rounded-xl border border-slate-200 p-3">
+              <p className="font-semibold text-slate-700 mb-1">정원(25명) 초과반 {res.over.length}개</p>
+              {res.over.map((o, i) => <p key={i} className="text-slate-600">· {o.cls} <b>{o.n}명</b></p>)}
+            </div>
+          )}
+        </div>
+      )}
+    </Panel>
+  );
 }
 
 /* ═══════════ 독서실 신청서 · 대기자 생성 ═══════════
