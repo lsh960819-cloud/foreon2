@@ -761,7 +761,27 @@ def fill_apply(ws, members):
         print(f"  ! {ws.title}: {len(members)}명 > 칸 {len(rows)}개 (초과분 누락)")
 
 
-def build_apply_workbook(tpl, classes, data, month, out_path):
+SWIM_CYCLE_START = (2026, 10)   # 수영·아쿠아 5개월 재추첨 주기 기준 (26.10~27.2, 27.3~27.7, …)
+
+
+def swim_renew_until(year, month):
+    """해당 월이 속한 5개월 주기의 마지막 달 → '27.2월'"""
+    base = SWIM_CYCLE_START[0] * 12 + SWIM_CYCLE_START[1] - 1
+    end = base + ((year * 12 + month - 1 - base) // 5) * 5 + 4
+    return f"{(end // 12) % 100:02d}.{end % 12 + 1}월"
+
+
+def set_renew_notice(wb, year, month):
+    """수영·아쿠아 신청서 7번 안내: 'NN.M월까지 자동 재등록'을 현재 주기 끝 달로"""
+    until = swim_renew_until(year, month)
+    for ws in wb.worksheets:
+        for r in range(6, 13):
+            v = ws.cell(r, 1).value
+            if isinstance(v, str) and "자동 재등록" in v and "5개월" in v:
+                ws.cell(r, 1).value = re.sub(r"\d{2}\.\s*\d{1,2}월\s*까지", f"{until}까지", v)
+
+
+def build_apply_workbook(tpl, classes, data, month, out_path, year=None):
     wb = load_workbook(tpl)
     existing = {ws.title: ws for ws in wb.worksheets if is_apply_sheet(ws)}
     samples = list(existing.values())
@@ -778,6 +798,8 @@ def build_apply_workbook(tpl, classes, data, month, out_path):
         normalize_notice(ws, samples)
         fill_apply(ws, data[cname])
         made.append(ws)
+    if year and apply_kind(Path(tpl).stem) == "수영":
+        set_renew_notice(wb, year, month)
     for ws in list(wb.worksheets):
         if ws not in made and ws.title != "월":
             wb.remove(ws)
@@ -804,7 +826,7 @@ def build_apply_zip(data, year, month):
             if not classes:
                 continue
             fname = f"{year}년 {month}월 {APPLY_KINDS[k]} 신청서.xlsx"
-            build_apply_workbook(tpls[k], classes, data, month, Path(td) / fname)
+            build_apply_workbook(tpls[k], classes, data, month, Path(td) / fname, year)
             z.write(Path(td) / fname, fname)
     return buf.getvalue()
 
