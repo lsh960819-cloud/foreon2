@@ -3,7 +3,7 @@ import {
   LogIn, LogOut, Search, PackageSearch, ClipboardList, CalendarDays, Home as HomeIcon,
   Plus, X, User, Loader2, MessageSquareWarning, ArrowLeftRight, Inbox, Send, Upload,
   CheckCircle2, Clock, FileText, GraduationCap, PlayCircle, Pencil, Trash2, Copy,
-  FolderOpen, Download, RefreshCw, CalendarCheck
+  FolderOpen, Download, RefreshCw, CalendarCheck, Menu
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { supabase } from "./supabaseClient.js";
@@ -287,7 +287,7 @@ const stamp = () => {
 function AuditLine({ r }) {
   const last = r.hist && r.hist.length ? r.hist[r.hist.length - 1] : null;
   if (!last) return null;
-  return <p className="text-[11px] text-amber-600 mt-1 font-mono">✎ {last.at} {last.by} 수정{r.hist.length > 1 ? ` (총 ${r.hist.length}회)` : ""}</p>;
+  return <p className="text-[11px] text-amber-600 mt-1">✎ {last.at} {last.by} 수정{r.hist.length > 1 ? ` (총 ${r.hist.length}회)` : ""}</p>;
 }
 /* 삭제된 항목 표시 (소프트 삭제) */
 function DeletedCard({ r, label }) {
@@ -323,6 +323,7 @@ function clearSession() {
 export default function App() {
   const [me, setMe] = useState(() => loadSession());
   const [tab, setTab] = useState("home");
+  const [nav, setNav] = useState(false);
 
   const login = (m) => { saveSession(m); setMe(m); };
   const logout = () => { clearSession(); setMe(null); };
@@ -370,43 +371,63 @@ export default function App() {
     { id: "link", label: "외부 연동", icon: ArrowLeftRight },
   ];
 
+  const cur = tabs.find((t) => t.id === tab) || tabs[0];
+  const go = (id) => { setTab(id); setNav(false); };
+
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800">
-      <div className="bg-white border-b border-slate-200 sticky top-0 z-10">
-        <div className="max-w-4xl mx-auto px-4 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-500" /><span className="font-bold">커뮤니티 운영</span></div>
+    <div className="min-h-screen bg-byb-bg text-byb-text">
+      {/* 상단 바 */}
+      <header className="bg-white border-b border-byb-line sticky top-0 z-30">
+        <div className="h-[50px] px-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <button onClick={() => setNav((v) => !v)} className="md:hidden w-8 h-8 flex items-center justify-center border border-byb-line text-slate-500">
+              <Menu size={16} />
+            </button>
+            <span className="text-[22px] font-bold tracking-tight text-emerald-600 leading-none">포레온</span>
+            <span className="text-[13px] text-slate-600">올림픽파크포레온 · 커뮤니티 운영</span>
+          </div>
           <div className="flex items-center gap-2">
-            <span className="flex items-center gap-1.5 text-sm rounded-lg bg-slate-100 px-2.5 py-1.5">
-              <User size={14} className="text-emerald-600" /><b>{me.id}</b>
-              <span className="text-xs text-slate-400 font-mono">{me.dept}</span>
+            <span className="flex items-center gap-1.5 h-8 px-3 border border-byb-line text-[13px]">
+              <User size={13} className="text-slate-500" /><b className="font-medium">{me.id}</b>
+              <span className="text-xs text-byb-sub">{me.dept}</span>
             </span>
-            <button onClick={logout} className="text-slate-400 hover:text-slate-600 p-1.5"><LogOut size={16} /></button>
+            <button onClick={logout} title="로그아웃" className="w-8 h-8 flex items-center justify-center border border-byb-line text-slate-500 hover:text-slate-700"><LogOut size={14} /></button>
           </div>
         </div>
-      </div>
+      </header>
 
-      <div className="max-w-4xl mx-auto px-4 pb-20">
-        <div className="flex gap-1 pt-4 pb-3 overflow-x-auto">
-          {tabs.map((t) => {
-            const on = tab === t.id; const Icon = t.icon;
-            return (
-              <button key={t.id} onClick={() => setTab(t.id)}
-                className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium whitespace-nowrap transition
-                  ${on ? "bg-emerald-600 text-white shadow-sm" : "text-slate-500 hover:bg-slate-100"}`}>
-                <Icon size={15} /> {t.label}
-              </button>
-            );
-          })}
-        </div>
+      <div className="flex">
+        {/* 왼쪽 메뉴 */}
+        <aside className={`${nav ? "block" : "hidden"} md:block fixed md:sticky top-[50px] left-0 z-20 w-[200px] shrink-0 h-[calc(100vh-50px)] overflow-y-auto bg-white border-r border-byb-line`}>
+          <nav className="py-3">
+            {tabs.map((t) => {
+              const on = tab === t.id; const Icon = t.icon;
+              return (
+                <button key={t.id} onClick={() => go(t.id)}
+                  className={`w-full flex items-center gap-2.5 pl-5 pr-3 h-11 text-[13px] text-left transition border-r-2
+                    ${on ? "bg-emerald-50 text-emerald-600 font-medium border-emerald-600" : "text-slate-700 border-transparent hover:bg-slate-50"}`}>
+                  <Icon size={15} className={on ? "text-emerald-600" : "text-slate-500"} /> {t.label}
+                </button>
+              );
+            })}
+          </nav>
+        </aside>
+        {nav && <div onClick={() => setNav(false)} className="md:hidden fixed inset-0 top-[50px] z-10 bg-black/20" />}
 
-        {tab === "home" && <Home me={me} events={events} />}
-        {tab === "attendance" && <Attendance key="att" me={me} />}
-        {tab === "apply" && <><Attendance key="apply" mode="apply" me={me} /><SwimClassChange me={me} /></>}
-        {tab === "reading" && <ReadingRoom />}
-        {tab === "stats" && <Attendance key="stats" mode="stats" me={me} />}
-        {tab === "lessonbyb" && <Attendance key="lesson" mode="lesson" me={me} />}
-        {tab === "officelog" && isOffice && <OfficeLog me={me} />}
-        {tab === "link" && <LinkInfo />}
+        {/* 본문 */}
+        <main className="flex-1 min-w-0 px-4 md:px-6 pt-6 pb-20">
+          <div className="max-w-5xl">
+            <h1 className="text-[22px] font-bold text-emerald-600 mb-5">{cur.label}</h1>
+            {tab === "home" && <Home me={me} events={events} />}
+            {tab === "attendance" && <Attendance key="att" me={me} />}
+            {tab === "apply" && <><Attendance key="apply" mode="apply" me={me} /><SwimClassChange me={me} /></>}
+            {tab === "reading" && <ReadingRoom />}
+            {tab === "stats" && <Attendance key="stats" mode="stats" me={me} />}
+            {tab === "lessonbyb" && <Attendance key="lesson" mode="lesson" me={me} />}
+            {tab === "officelog" && isOffice && <OfficeLog me={me} />}
+            {tab === "link" && <LinkInfo />}
+          </div>
+        </main>
       </div>
     </div>
   );
@@ -426,11 +447,11 @@ function Login({ onLogin }) {
     <div className="min-h-screen bg-slate-100 flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-6">
-          <div className="inline-flex items-center gap-2 text-xs font-mono tracking-widest text-emerald-700 mb-2"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> FOREON 커뮤니티</div>
+          <div className="inline-flex items-center gap-2 text-xs tracking-widest text-emerald-700 mb-2"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> FOREON 커뮤니티</div>
           <h1 className="text-2xl font-bold">커뮤니티 운영</h1>
           <p className="text-sm text-slate-500 mt-1">아이디로 로그인하세요</p>
         </div>
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
+        <div className="bg-white border border-byb-line p-6 space-y-4">
           <label className="block"><span className="text-xs font-medium text-slate-600 mb-1.5 block">아이디</span>
             <input value={id} onChange={(e) => setId(e.target.value)} placeholder="아이디 입력"
               className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" /></label>
@@ -566,7 +587,7 @@ function ComplaintCard({ r, onToggle, onSave, onDelete }) {
           </div>
           <p className="font-medium mt-1.5">{r.content}</p>
           {r.action && <p className="text-sm text-emerald-800 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-1.5 mt-2"><b>조치 · </b>{r.action}</p>}
-          <p className="text-[11px] text-slate-400 mt-2 font-mono">{r.time} · {r.owner} · {r.by}</p>
+          <p className="text-[11px] text-slate-400 mt-2">{r.time} · {r.owner} · {r.by}</p>
           <AuditLine r={r} />
         </div>
         <div className="shrink-0 flex flex-col items-end gap-2">
@@ -622,7 +643,7 @@ function MemoCard({ r, onSave, onDelete }) {
     <div className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm">
       <div className="flex items-center gap-2 mb-1">
         <span className="text-xs px-2 py-0.5 rounded bg-sky-100 text-sky-700">{r.type}</span>
-        <span className="text-xs text-slate-400 font-mono">{r.dept}</span>
+        <span className="text-xs text-slate-400">{r.dept}</span>
         <div className="ml-auto flex gap-1">
           <button onClick={() => { setT(r.text); setEdit(!edit); }} className="text-slate-400 hover:text-emerald-600 p-1" title="수정"><Pencil size={13} /></button>
           <button onClick={onDelete} className="text-slate-400 hover:text-rose-600 p-1" title="삭제"><Trash2 size={13} /></button>
@@ -637,7 +658,7 @@ function MemoCard({ r, onSave, onDelete }) {
           </div>
         </div>
       ) : <p className="text-sm">{r.text}</p>}
-      <p className="text-[11px] text-slate-400 mt-1.5 font-mono">{r.at} · {r.by}</p>
+      <p className="text-[11px] text-slate-400 mt-1.5">{r.at} · {r.by}</p>
       <AuditLine r={r} />
     </div>
   );
@@ -706,12 +727,12 @@ function RequestCard({ r, canReply, canEdit, onReply, onSave, onDelete }) {
           </div>
         </div>
       ) : <p className="text-sm">{r.text}</p>}
-      <p className="text-[11px] text-slate-400 mt-1.5 font-mono">{r.date} · {r.by} ({r.dept})</p>
+      <p className="text-[11px] text-slate-400 mt-1.5">{r.date} · {r.by} ({r.dept})</p>
       <AuditLine r={r} />
       {r.replies.map((rp, i) => (
         <div key={i} className="mt-2 ml-3 pl-3 border-l-2 border-emerald-200">
           <p className="text-sm text-emerald-800">↳ {rp.text}</p>
-          <p className="text-[11px] text-slate-400 font-mono">{rp.date} · {rp.by} (사무실)</p>
+          <p className="text-[11px] text-slate-400">{rp.date} · {rp.by} (사무실)</p>
         </div>
       ))}
       {canReply && (
@@ -898,7 +919,7 @@ function Events({ me, rows, setRows }) {
                 <div className="flex items-center gap-2 mb-1">
                   <CalendarDays size={15} className="text-emerald-600" />
                   <span className="font-semibold">{r.title}</span>
-                  <span className="text-xs text-slate-400 font-mono ml-auto">{r.date}</span>
+                  <span className="text-xs text-slate-400 ml-auto">{r.date}</span>
                   {office && (
                     <>
                       <button onClick={() => startEdit(r)} className="text-slate-400 hover:text-emerald-600 p-1" title="수정"><Pencil size={14} /></button>
@@ -910,7 +931,7 @@ function Events({ me, rows, setRows }) {
                 {r.file && (r.file.type.includes("image")
                   ? <img src={r.file.url} alt="" className="mt-2 rounded-lg border border-slate-200 max-h-56" />
                   : <a href={r.file.url} download={r.file.name} className="mt-2 inline-flex items-center gap-1.5 text-sm text-sky-600 bg-sky-50 rounded-lg px-3 py-1.5"><FileText size={14} /> {r.file.name}</a>)}
-                <p className="text-[11px] text-slate-400 mt-2 font-mono">등록 · {r.by}</p>
+                <p className="text-[11px] text-slate-400 mt-2">등록 · {r.by}</p>
               </>
             )}
           </div>
@@ -1040,7 +1061,7 @@ function Home({ me, events }) {
 
       {/* 선택한 카드의 목록 */}
       {view && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
+        <div className="bg-white border border-byb-line p-4">
           <div className="flex items-center justify-between mb-2">
             <h3 className="font-bold text-sm">{cards.find((c) => c.id === view).label}</h3>
             <div className="flex items-center gap-2">
@@ -1116,13 +1137,13 @@ function Home({ me, events }) {
       )}
 
       {/* 다가오는 행사 */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+      <div className="bg-white border border-byb-line p-5">
         <h3 className="font-bold flex items-center gap-1.5 mb-3"><CalendarDays size={17} className="text-emerald-600" /> 다가오는 행사·일정</h3>
         {upcoming.length ? (
           <div className="space-y-2">
             {upcoming.map((e) => (
               <div key={e.id} className="flex items-start gap-3 border-b border-slate-50 pb-2 last:border-0">
-                <span className="text-xs font-mono bg-emerald-50 text-emerald-700 rounded px-2 py-1 shrink-0">{e.date?.slice(5)}</span>
+                <span className="text-xs bg-emerald-50 text-emerald-700 rounded px-2 py-1 shrink-0">{e.date?.slice(5)}</span>
                 <div className="min-w-0">
                   <p className="text-sm font-medium">{e.title}</p>
                   {e.text && <p className="text-xs text-slate-500 truncate">{e.text}</p>}
@@ -1252,7 +1273,7 @@ function DailyExcel({ me }) {
             <textarea rows={6} value={notes}
               onChange={(e) => { setNotes(e.target.value); setDirty(true); }}
               placeholder={"- 업무내용1\n- 업무내용2\n- 업무내용3"}
-              className="w-full rounded-lg border border-slate-200 p-2.5 text-sm outline-none focus:border-emerald-500 resize-none font-mono" />
+              className="w-full rounded-lg border border-slate-200 p-2.5 text-sm outline-none focus:border-emerald-500 resize-none" />
             <div className="flex items-center justify-between mt-1.5 gap-2">
               <p className="text-[11px] text-slate-400">
                 한 줄이 한 칸 · {notes.split("\n").filter((l) => l.trim()).length}줄 (최대 11줄)
@@ -1413,7 +1434,7 @@ function SharedFiles({ me }) {
   };
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
+    <div className="bg-white border border-byb-line p-5 space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="font-bold">자료실</h2>
         <button onClick={() => load(folder)} className="text-xs text-slate-500 flex items-center gap-1">
@@ -1611,7 +1632,7 @@ function TransferForm({ me }) {
   const running = job && (job.status === "pending" || job.status === "working");
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
+    <div className="bg-white border border-byb-line p-5 space-y-4">
       <div>
         <span className="text-xs font-medium text-slate-500 block mb-1.5">강좌 그룹 선택</span>
         <div className="flex flex-wrap gap-1.5">
@@ -1820,7 +1841,7 @@ function LessonForm({ me }) {
 
   return (
     <div>
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
+      <div className="bg-white border border-byb-line p-5 space-y-4">
         <ActionToggle action={action} setAction={setAction} />
         {isAI && (
           <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
@@ -1958,7 +1979,7 @@ function ReservationForm({ me, kind, options, seatLabel, seatPh }) {
         )}
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
+      <div className="bg-white border border-byb-line p-5 space-y-4">
         <div>
           <span className="text-xs font-medium text-slate-500 block mb-1.5">{kind === "독서실" ? "독서실 종류" : "락커 위치"}</span>
           <div className="inline-flex p-1 bg-slate-100 rounded-lg">
@@ -2153,7 +2174,7 @@ function WorkLogs({ me }) {
                 </div>
                 <p className="text-sm font-medium mt-1">{r.target}{r.seat ? ` · ${r.seat}` : ""}</p>
                 <p className="text-xs text-slate-500 mt-0.5">{r.dong}동 {r.ho}호 · {r.member}{r.timing ? ` · ${r.timing}` : ""}</p>
-                <p className="text-[11px] text-slate-400 mt-1.5 font-mono">{r.at} · {r.by}</p>
+                <p className="text-[11px] text-slate-400 mt-1.5">{r.at} · {r.by}</p>
               </div>
             ))}
           </div>}
@@ -2165,7 +2186,7 @@ function WorkLogs({ me }) {
 /* ─────────────────────── 외부 연동 안내 */
 function LinkInfo() {
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+    <div className="bg-white border border-byb-line p-5">
       <div className="flex items-center gap-2 mb-2"><ArrowLeftRight size={18} className="text-emerald-600" /><h2 className="font-bold">외부 홈페이지 연동 (강습 취소 등록)</h2></div>
       <p className="text-sm text-slate-600 leading-relaxed">
         결론부터: <b className="text-emerald-700">조건부로 가능합니다.</b> 다만 이 웹페이지가 직접 다른 사이트(BYB 등)를 클릭할 수는 없고, 방식이 세 가지로 나뉩니다.
@@ -2714,7 +2735,7 @@ function LessonPanel({ call, me }) {
 
 /* ─────────────────────── 공통 */
 function L({ label, children }) { return <label className="block"><span className="text-[11px] font-medium text-slate-500 mb-1 block">{label}</span>{children}</label>; }
-function Panel({ title, children }) { return <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 mb-4"><p className="text-sm font-semibold text-slate-700 mb-3">{title}</p>{children}</div>; }
+function Panel({ title, children }) { return <div className="bg-white border border-byb-line mb-4"><p className="px-4 py-3 border-b border-byb-line text-[14px] font-bold text-slate-800">{title}</p><div className="p-4">{children}</div></div>; }
 function Stat({ label, value, accent }) {
   return <div className={`rounded-xl border p-3 ${accent ? "bg-emerald-600 border-emerald-600 text-white" : "bg-white border-slate-200"}`}>
     <p className={`text-xs ${accent ? "text-emerald-100" : "text-slate-500"}`}>{label}</p><p className="text-base font-bold mt-0.5">{value}</p></div>;

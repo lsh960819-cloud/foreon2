@@ -1,3 +1,11 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+html { font-size: 14px; }
+body { font-family: "Noto Sans KR", "Malgun Gothic", sans-serif; color: #333; background: #f0f2f5; letter-spacing: -0.2px; }
+input, select, textarea, button { font-family: inherit; }
+input:focus, select:focus, textarea:focus { outline: none; border-color: #2f80e0 !important; box-shadow: none; }
+table th { font-weight: 500; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #c9ced6; border-radius: 4px; }
