@@ -3,7 +3,7 @@ import {
   LogIn, LogOut, Search, PackageSearch, ClipboardList, CalendarDays, Home as HomeIcon,
   Plus, X, User, Loader2, MessageSquareWarning, ArrowLeftRight, Inbox, Send, Upload,
   CheckCircle2, Clock, FileText, GraduationCap, PlayCircle, Pencil, Trash2, Copy,
-  FolderOpen, Download, RefreshCw, CalendarCheck, Menu, KeyRound, Monitor, AlertTriangle
+  FolderOpen, Download, RefreshCw, CalendarCheck, Menu, KeyRound, Monitor, AlertTriangle, Sparkles
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
@@ -370,6 +370,7 @@ export default function App() {
     { id: "stats", label: "월간 이용 통계", icon: Search },
     { id: "saunakey", label: "사우나 핸드키", icon: KeyRound },
     { id: "screen", label: "스크린천 주문", icon: Monitor },
+    { id: "cleaning", label: "시설 청소 관리", icon: Sparkles },
     ...(isOffice ? [{ id: "officelog", label: "사무실 업무일지", icon: ClipboardList }] : []),
     { id: "link", label: "외부 연동", icon: ArrowLeftRight },
   ];
@@ -431,6 +432,7 @@ export default function App() {
             {tab === "link" && <LinkInfo />}
             {tab === "saunakey" && <SaunaKeys />}
             {tab === "screen" && <ScreenCloth />}
+            {tab === "cleaning" && <Cleaning me={me} />}
           </div>
         </main>
       </div>
@@ -4285,6 +4287,297 @@ function ScInput({ data, now, save, addOrders, flash }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/* settings 표에 JSON 하나로 저장하는 공용 훅 (실패하면 이 브라우저 localStorage 에 임시 저장) */
+function useSettingJson(key, seed, norm) {
+  const [data, setData] = useState(null);
+  const [warn, setWarn] = useState("");
+  React.useEffect(() => {
+    let alive = true;
+    (async () => {
+      let row = null, error = null;
+      try { ({ data: row, error } = await supabase.from("settings").select("value").eq("key", key).maybeSingle()); } catch (e) { error = e; }
+      if (!alive) return;
+      if (error) { setWarn(`서버 저장소에 연결하지 못해 이 브라우저에만 저장됩니다 (${error.message})`); setData(norm(lsGet(key)) || seed()); return; }
+      const cur = norm(row?.value);
+      if (cur) { setData(cur); return; }
+      setData(seed());
+      if (row) setWarn("저장된 값을 읽지 못해 기본값을 보여줍니다.");
+    })();
+    return () => { alive = false; };
+  }, [key]);
+  const save = async (next) => {
+    setData(next);
+    try { localStorage.setItem(key, JSON.stringify(next)); } catch { /* 무시 */ }
+    let error = null;
+    try { ({ error } = await supabase.from("settings").upsert({ key, value: JSON.stringify(next) })); } catch (e) { error = e; }
+    if (error) setWarn("서버 저장 실패 (이 브라우저에는 저장됨): " + error.message);
+  };
+  return [data, save, warn];
+}
+
+/* ═══════════ 시설 청소 관리 ═══════════
+   구역마다 청소주기(일)를 두고 → 이번 주(월~일)에 해야 할 구역을 자동 배정 · 완료 체크 · 기록
+   처음 하는 월간/분기 구역은 같은 시설 안에서 주차별로 나눠 배정(한 주에 몰리지 않게)
+   저장: settings 표 key "cleaning" (JSON). 구역을 화면에서 직접 고치기 전까지는 코드의 기본 구역(CL_VER)을 따라감 */
+const CL_KEY = "cleaning";
+const CL_VER = 1;
+const CL_FLOORS = ["2F", "1F", "B1", "B2"];
+const CL_FACS = [
+  { id: "tennis", f: "2F", name: "스크린테니스" }, { id: "pingpong", f: "2F", name: "탁구장" },
+  { id: "fitness", f: "1F", name: "피트니스" }, { id: "futsal", f: "1F", name: "풋살장" },
+  { id: "golf", f: "B1", name: "골프연습장" }, { id: "screengolf", f: "B1", name: "스크린골프룸" }, { id: "lounge", f: "B1", name: "골프라운지(카페)" },
+  { id: "sauna_m1", f: "B2", name: "남자 사우나 1" }, { id: "sauna_m2", f: "B2", name: "남자 사우나 2" },
+  { id: "sauna_w1", f: "B2", name: "여자 사우나 1" }, { id: "sauna_w2", f: "B2", name: "여자 사우나 2" },
+  { id: "pool", f: "B2", name: "수영장" },
+];
+const CL_FAC = Object.fromEntries(CL_FACS.map((f) => [f.id, f]));
+const CL_CYC = [[1, "매일"], [7, "주 1회"], [14, "2주 1회"], [30, "월 1회"], [90, "분기 1회"], [180, "반기 1회"]];
+const clCyc = (c) => (CL_CYC.find((x) => x[0] === c) || [0, `${c}일마다`])[1];
+// 기본 구역(대략) — 시설별 체크목록 받으면 여기를 고치고 CL_VER 올림
+const CL_SAUNA = [["탕(온탕·냉탕) 물빼기·청소", 7], ["샤워부스·수전·거울", 7], ["바닥 물때·배수구", 7], ["사우나실 내부(의자·벽)", 7],
+  ["파우더룸 세면대·드라이기·거울", 7], ["탈의실 락커 상부·내부", 30], ["벽·천장 타일 줄눈 곰팡이", 30], ["환기구·조명", 90]];
+const CL_DEFAULT = {
+  tennis: [["코트 바닥(매트)", 7], ["대기석·라켓 거치대", 7], ["출입문·유리", 7], ["스크린·센서 먼지", 30], ["볼머신 주변·공 정리", 30], ["에어컨 필터·조명", 90]],
+  pingpong: [["바닥", 7], ["탁구대 표면", 7], ["대기 의자·출입문", 7], ["칸막이(펜스)·네트", 30], ["창문·유리", 30], ["에어컨 필터·조명", 90]],
+  fitness: [["유산소 기구(러닝머신 벨트·하부)", 7], ["웨이트 기구 손잡이·패드 소독", 7], ["거울·유리", 7], ["덤벨·랙·소도구 정리", 7], ["스트레칭존 매트", 7],
+    ["기구 하부 바닥 먼지", 30], ["에어컨 필터·환기구", 90]],
+  futsal: [["대기 벤치·출입구", 7], ["인조잔디 이물질 제거", 30], ["골대·네트", 30], ["펜스·조명", 90]],
+  golf: [["타석 매트·주변 바닥", 7], ["칸막이·대기석", 7], ["클럽 거치대·볼 박스", 30], ["네트·스크린 먼지", 30], ["천장·조명", 90]],
+  screengolf: [["룸 바닥·스윙 매트", 7], ["소파·테이블", 7], ["출입문·유리", 7], ["스크린 먼지(털이개)", 30], ["센서·프로젝터 렌즈", 30], ["에어컨 필터", 90]],
+  lounge: [["테이블·의자", 7], ["카운터·커피머신 주변", 7], ["바닥", 7], ["냉장고·제빙기 내부", 30], ["유리창·출입문", 30], ["에어컨 필터", 90]],
+  sauna_m1: CL_SAUNA, sauna_m2: CL_SAUNA, sauna_w1: CL_SAUNA, sauna_w2: CL_SAUNA,
+  pool: [["풀사이드 바닥·배수구", 7], ["수조 바닥·벽면(수중 청소기)", 7], ["샤워실 연결 통로·발판", 7], ["킥판·풀부이 등 강습 용품", 30], ["관람석·유리창", 30], ["천장·조명·환기구", 90]],
+};
+const clZones = () => CL_FACS.flatMap((f) => (CL_DEFAULT[f.id] || []).map(([name, cyc], i) => ({ id: `${f.id}-${i + 1}`, fac: f.id, name, cyc })));
+const clMon = (d) => scAdd(d, -((new Date(d).getUTCDay() + 6) % 7));   // 그 주 월요일
+const clMD = (d) => `${+d.slice(5, 7)}/${+d.slice(8)}`;
+
+function clPlan(data, today) {
+  const W = clMon(today), E = scAdd(W, 6), W0 = clMon(data.start || today);
+  const last = {};
+  data.logs.forEach((l) => { if (!last[l.zone] || l.date > last[l.zone]) last[l.zone] = l.date; });
+  const rank = {}, cnt = {};
+  data.zones.forEach((z) => { const k = `${z.fac}|${z.cyc}`; cnt[k] = (cnt[k] ?? -1) + 1; rank[z.id] = cnt[k]; });
+  return data.zones.map((z) => {
+    const L = last[z.id];
+    if (z.cyc <= 1) return { ...z, last: L, due: today, thisWeek: true, state: L === today ? "done" : "todo", late: false };
+    if (L && L >= W) return { ...z, last: L, thisWeek: true, state: "done", late: false };
+    const due = L ? scAdd(L, z.cyc) : scAdd(W0, (rank[z.id] % Math.max(1, Math.round(z.cyc / 7))) * 7);
+    const thisWeek = due <= E;
+    return { ...z, last: L, due, thisWeek, state: thisWeek ? "todo" : "later", late: due < W, lateDays: due < W ? scDiff(due, today) : 0 };
+  });
+}
+
+function Cleaning({ me }) {
+  const today = kstDay();
+  const [data, save, warn] = useSettingJson(CL_KEY,
+    () => ({ ver: CL_VER, custom: false, start: today, zones: clZones(), logs: [] }),
+    (v) => {
+      let o = v;
+      try { if (typeof v === "string") o = JSON.parse(v); } catch { o = null; }
+      if (!o || !Array.isArray(o.zones)) return null;
+      const zones = !o.custom && o.ver !== CL_VER ? clZones() : o.zones;
+      return { ver: CL_VER, custom: !!o.custom, start: o.start || today, zones, logs: Array.isArray(o.logs) ? o.logs : [] };
+    });
+  const [view, setView] = useState("week");
+  const [msg, setMsg] = useState("");
+  const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 2000); };
+  if (!data) return <p className="text-sm text-slate-400 py-10 flex items-center justify-center gap-2"><Loader2 size={14} className="animate-spin" /> 불러오는 중…</p>;
+  const W = clMon(today);
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex border border-byb-line bg-white">
+          {[["week", "이번 주 청소"], ["zones", "구역·주기 설정"], ["logs", "완료 기록"]].map(([id, l]) => (
+            <button key={id} onClick={() => setView(id)}
+              className={`px-4 h-9 text-[13px] ${view === id ? "bg-emerald-600 text-white font-medium" : "text-slate-600 hover:bg-slate-50"}`}>{l}</button>
+          ))}
+        </div>
+        <p className="text-[11px] text-slate-400">이번 주 {clMD(W)}(월) ~ {clMD(scAdd(W, 6))}(일) · 오늘 {clMD(today)}({scWk(today)})</p>
+      </div>
+      {warn && <p className="text-xs text-slate-600 bg-amber-50 border border-amber-200 px-3 py-2">{warn}</p>}
+      {msg && <p className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-slate-800 text-white text-xs px-4 py-2.5">{msg}</p>}
+      {view === "week" && <ClWeek data={data} save={save} me={me} today={today} flash={flash} />}
+      {view === "zones" && <ClZones data={data} save={save} flash={flash} />}
+      {view === "logs" && <ClLogs data={data} save={save} />}
+    </div>
+  );
+}
+
+function ClWeek({ data, save, me, today, flash }) {
+  const [day, setDay] = useState(today);
+  const [fl, setFl] = useState("");
+  const plan = useMemo(() => clPlan(data, today), [data, today]);
+  const W = clMon(today);
+  const wk = plan.filter((z) => z.thisWeek);
+  const done = wk.filter((z) => z.state === "done").length;
+  const late = wk.filter((z) => z.state === "todo" && z.late).length;
+  const pct = wk.length ? Math.round((done / wk.length) * 100) : 0;
+
+  const check = (z) => {
+    if (z.state === "done") {
+      const from = z.cyc <= 1 ? today : W;
+      if (!askYesNo(`${CL_FAC[z.fac].name} · ${z.name}\n완료 체크를 취소할까요?`)) return;
+      save({ ...data, logs: data.logs.filter((l) => !(l.zone === z.id && l.date >= from)) });
+      return;
+    }
+    save({ ...data, logs: [...data.logs, { id: `${Date.now().toString(36)}-${z.id}`, zone: z.id, date: day, by: me?.id || "" }] });
+    flash(`${z.name} 완료 (${clMD(day)})`);
+  };
+  const order = { todo: 0, done: 1 };
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {[["이번 주 할 일", `${wk.length}건`, "주기상 이번 주 차례", "text-slate-900"],
+          ["완료", `${done}건`, `진행률 ${pct}%`, "text-emerald-600"],
+          ["남은 것", `${wk.length - done}건`, "이번 주 일요일까지", wk.length - done ? "text-amber-600" : "text-slate-900"],
+          ["밀린 것", `${late}건`, "지난주 이전에 했어야 함", late ? "text-rose-600" : "text-slate-900"]].map(([l, v, f, c]) => (
+          <div key={l} className="bg-white border border-byb-line px-3 py-2.5">
+            <p className="text-[11px] text-slate-500">{l}</p><p className={`text-xl font-bold mt-0.5 ${c}`}>{v}</p><p className="text-[11px] text-slate-400 mt-0.5">{f}</p>
+          </div>
+        ))}
+      </div>
+      <div className="h-2 bg-white border border-byb-line"><div className="h-full bg-emerald-600" style={{ width: `${pct}%` }} /></div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap gap-1">
+          {["", ...CL_FLOORS].map((f) => (
+            <button key={f || "all"} onClick={() => setFl(f)}
+              className={`text-[12px] px-3 py-1.5 border ${fl === f ? "bg-emerald-600 border-emerald-600 text-white" : "bg-white border-byb-line text-slate-600"}`}>{f || "전체"}</button>
+          ))}
+        </div>
+        <label className="ml-auto flex items-center gap-1.5 text-[11px] text-slate-500">체크 날짜
+          <input type="date" value={day} max={today} onChange={(e) => setDay(e.target.value || today)} className="border border-byb-line px-2 py-1 text-xs" />
+        </label>
+      </div>
+
+      {CL_FLOORS.filter((f) => !fl || fl === f).map((f) => (
+        <div key={f}>
+          <p className="text-[13px] font-bold text-slate-600 mb-2">{f}</p>
+          <div className="grid md:grid-cols-2 gap-3">
+            {CL_FACS.filter((x) => x.f === f).map((fac) => {
+              const items = wk.filter((z) => z.fac === fac.id).sort((a, b) => order[a.state] - order[b.state] || (b.late ? 1 : 0) - (a.late ? 1 : 0));
+              const d = items.filter((z) => z.state === "done").length;
+              const next = plan.filter((z) => z.fac === fac.id && z.state === "later").sort((a, b) => a.due.localeCompare(b.due))[0];
+              return (
+                <div key={fac.id} className="bg-white border border-byb-line">
+                  <div className="px-4 py-2.5 border-b border-byb-line flex items-center justify-between gap-2">
+                    <b className="text-[14px] text-slate-800">{fac.name}</b>
+                    <span className={`text-[11px] ${items.length && d === items.length ? "text-emerald-600 font-bold" : "text-slate-500"}`}>
+                      {items.length ? (d === items.length ? "이번 주 완료 ✓" : `${d}/${items.length} 완료`) : "이번 주 없음"}</span>
+                  </div>
+                  <div className="divide-y divide-byb-line">
+                    {items.map((z) => {
+                      const on = z.state === "done";
+                      return (
+                        <button key={z.id} onClick={() => check(z)} className="w-full flex items-center gap-2.5 px-4 py-2 text-left hover:bg-slate-50">
+                          <span className={`w-[18px] h-[18px] shrink-0 border flex items-center justify-center ${on ? "bg-emerald-600 border-emerald-600 text-white" : z.late ? "border-rose-400" : "border-slate-300"}`}>
+                            {on && <CheckCircle2 size={12} />}</span>
+                          <span className={`flex-1 text-[13px] ${on ? "text-slate-400 line-through" : "text-slate-800"}`}>{z.name}</span>
+                          <span className="text-[10px] px-1.5 py-0.5 border border-byb-line text-slate-500 whitespace-nowrap">{clCyc(z.cyc)}</span>
+                          <span className={`w-[4.5rem] text-right text-[11px] whitespace-nowrap ${on ? "text-emerald-600" : z.late ? "text-rose-600 font-medium" : "text-slate-400"}`}>
+                            {on ? `${clMD(z.last)} 완료` : z.late ? `${z.lateDays}일 밀림` : z.cyc <= 1 ? "오늘" : "이번 주"}</span>
+                        </button>
+                      );
+                    })}
+                    {!items.length && <p className="px-4 py-3 text-[12px] text-slate-400">이번 주에 할 구역이 없습니다.</p>}
+                  </div>
+                  {next && <p className="px-4 py-2 border-t border-byb-line text-[11px] text-slate-400">다음: {next.name} · {clMD(clMon(next.due))} 주</p>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ClZones({ data, save, flash }) {
+  const [draft, setDraft] = useState(() => data.zones.map((z) => ({ ...z })));
+  const dirty = JSON.stringify(draft) !== JSON.stringify(data.zones);
+  const set = (id, k, v) => setDraft((d) => d.map((z) => (z.id === id ? { ...z, [k]: v } : z)));
+  const add = (fac) => setDraft((d) => [...d, { id: `${fac}-${Date.now().toString(36)}`, fac, name: "", cyc: 7 }]);
+  const del = (z) => { if (!z.name || askYesNo(`'${z.name}' 구역을 삭제할까요? (완료 기록은 남습니다)`)) setDraft((d) => d.filter((x) => x.id !== z.id)); };
+  const submit = () => {
+    const zones = draft.filter((z) => z.name.trim()).map((z) => ({ ...z, name: z.name.trim() }));
+    save({ ...data, custom: true, zones }); setDraft(zones); flash("구역·주기 저장됨");
+  };
+  return (
+    <div className="space-y-3 pb-14">
+      <p className="text-[12px] text-slate-500">시설별 청소 구역과 주기를 정합니다. 월 1회·분기 1회 구역은 같은 시설 안에서 주차별로 나눠 배정됩니다.</p>
+      {CL_FLOORS.map((f) => (
+        <div key={f}>
+          <p className="text-[13px] font-bold text-slate-600 mb-2">{f}</p>
+          <div className="grid md:grid-cols-2 gap-3">
+            {CL_FACS.filter((x) => x.f === f).map((fac) => (
+              <div key={fac.id} className="bg-white border border-byb-line">
+                <p className="px-4 py-2.5 border-b border-byb-line text-[14px] font-bold text-slate-800">{fac.name}</p>
+                <div className="p-3 space-y-1.5">
+                  {draft.filter((z) => z.fac === fac.id).map((z) => (
+                    <div key={z.id} className="flex items-center gap-1.5">
+                      <input value={z.name} onChange={(e) => set(z.id, "name", e.target.value)} placeholder="청소 구역"
+                        className="flex-1 min-w-0 border border-byb-line px-2 py-1.5 text-[13px] focus:outline-none focus:border-emerald-500" />
+                      <select value={z.cyc} onChange={(e) => set(z.id, "cyc", +e.target.value)} className="border border-byb-line px-1.5 py-1.5 text-[12px] bg-white">
+                        {CL_CYC.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                      </select>
+                      <button onClick={() => del(z)} className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-rose-600"><X size={14} /></button>
+                    </div>
+                  ))}
+                  <button onClick={() => add(fac.id)} className="flex items-center gap-1 text-[12px] text-emerald-600 px-1 py-1"><Plus size={13} /> 구역 추가</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+      {dirty && (
+        <div className="fixed bottom-0 left-0 right-0 md:left-[200px] z-30 bg-white border-t border-byb-line px-4 py-3 flex items-center justify-end gap-2">
+          <span className="text-[12px] text-slate-500 mr-auto">저장하지 않은 변경이 있습니다</span>
+          <button onClick={() => setDraft(data.zones.map((z) => ({ ...z })))} className="text-[12px] text-slate-500 px-3">되돌리기</button>
+          <button onClick={submit} className="bg-emerald-600 hover:bg-emerald-700 text-white text-[13px] font-medium px-5 py-2">변경 저장</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ClLogs({ data, save }) {
+  const [ff, setFf] = useState("");
+  const zone = Object.fromEntries(data.zones.map((z) => [z.id, z]));
+  const facOf = (l) => zone[l.zone]?.fac || l.zone.replace(/-[^-]+$/, "");
+  const list = data.logs.filter((l) => !ff || facOf(l) === ff).sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+  const del = (l) => { if (askYesNo(`${clMD(l.date)} ${zone[l.zone]?.name || "삭제된 구역"} 완료 기록을 지울까요?`)) save({ ...data, logs: data.logs.filter((x) => x.id !== l.id) }); };
+  return (
+    <div className="bg-white border border-byb-line">
+      <div className="px-4 py-3 border-b border-byb-line flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[14px] font-bold text-slate-800">완료 기록 <span className="font-normal text-xs text-slate-400">{list.length}건</span></p>
+        <select value={ff} onChange={(e) => setFf(e.target.value)} className="border border-byb-line px-2.5 py-1.5 text-xs bg-white">
+          <option value="">전체 시설</option>{CL_FACS.map((f) => <option key={f.id} value={f.id}>{f.f} {f.name}</option>)}
+        </select>
+      </div>
+      {!list.length ? <p className="text-sm text-slate-400 py-10 text-center">아직 완료 기록이 없습니다. [이번 주 청소]에서 체크하면 쌓입니다.</p> : (
+        <div className="max-h-[36rem] overflow-y-auto">
+          <table className="w-full text-[12px]">
+            <thead className="bg-byb-bg text-slate-500 sticky top-0"><tr>{["날짜", "시설", "구역", "체크", ""].map((h) => <th key={h} className="text-left font-medium px-4 py-2 whitespace-nowrap">{h}</th>)}</tr></thead>
+            <tbody>
+              {list.map((l) => (
+                <tr key={l.id} className="border-t border-byb-line text-slate-700">
+                  <td className="px-4 py-2 whitespace-nowrap">{scShort(l.date)} ({scWk(l.date)})</td>
+                  <td className="px-4 py-2 whitespace-nowrap">{CL_FAC[facOf(l)]?.name || "-"}</td>
+                  <td className="px-4 py-2">{zone[l.zone]?.name || <span className="text-slate-400">삭제된 구역</span>}</td>
+                  <td className="px-4 py-2 whitespace-nowrap text-slate-400">{l.by}</td>
+                  <td className="px-2 py-2 text-right"><button onClick={() => del(l)} className="text-slate-400 hover:text-rose-600"><Trash2 size={13} /></button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
