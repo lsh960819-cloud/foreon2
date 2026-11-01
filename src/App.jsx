@@ -3862,7 +3862,10 @@ function SaunaKeys() {
    주문 기록·타석별 사이즈/교체주기는 settings 표(key: screen_orders)에 JSON 으로 저장 → 별도 SQL 필요 없음
    교체주기 = 타석별 주문 간격 평균(그룹 평균을 한 번 더 섞어 이력이 적을 때 튀지 않게), 이력 없으면 그룹/전체 평균 */
 const SC_KEY = "screen_orders";
-const SC_GROUPS = [{ id: "gdr", label: "GDR 타석", n: 14 }, { id: "room", label: "스크린룸", n: 5 }];
+// start = 운영 시작일(처음 설치한 천) → 첫 교체까지 걸린 기간도 주기 계산에 포함
+const SC_GROUPS = [{ id: "gdr", label: "GDR 타석", n: 14 }, { id: "room", label: "스크린룸", n: 5, start: "2025-05-01" }];
+const SC_START = { gdr: "", room: "2025-05-01" };
+const SC_MIN_IV = 45; // 45일 안에 다시 주문한 건 불량·파손 재주문으로 보고 주기 계산에서 제외
 const scName = (g, no) => (g === "gdr" ? `${no}번타석` : `스크린룸 ${no}번`);
 const SC_UNITS = SC_GROUPS.flatMap((g) => Array.from({ length: g.n }, (_, i) => ({ key: `${g.id}-${i + 1}`, g: g.id, no: i + 1, name: scName(g.id, i + 1) })));
 const SC_UNIT = Object.fromEntries(SC_UNITS.map((u, i) => [u.key, { ...u, idx: i }]));
@@ -3916,22 +3919,26 @@ function scAnalyze(data, now) {
   const dates = {}, iv = {}, gIv = { gdr: [], room: [] };
   SC_UNITS.forEach((u) => { dates[u.key] = []; });
   data.orders.forEach((o) => dates[o.unit].push(o.date));
+  const seqs = {};
   SC_UNITS.forEach((u) => {
     const d = [...new Set(dates[u.key])].sort(); dates[u.key] = d;
-    iv[u.key] = d.slice(1).map((x, i) => scDiff(d[i], x));
+    const st = SC_START[u.g];
+    const seq = st ? [st, ...d.filter((x) => x > st)] : d; seqs[u.key] = seq;
+    iv[u.key] = seq.slice(1).map((x, i) => scDiff(seq[i], x)).filter((n) => n >= SC_MIN_IV);
     gIv[u.g].push(...iv[u.key]);
   });
   const allMed = scMed([...gIv.gdr, ...gIv.room]) || 105;
   const base = (g) => Math.round(gIv[g].length >= 3 ? scMed(gIv[g]) : allMed);
   return SC_UNITS.map((u) => {
-    const d = dates[u.key], v = iv[u.key], set = data.units[u.key];
+    const d = dates[u.key], seq = seqs[u.key], v = iv[u.key], set = data.units[u.key];
     const manual = Number(set.cycleM) > 0;
     const cycle = manual ? Math.round(Number(set.cycleM) * 30.4) : Math.round((v.reduce((a, b) => a + b, 0) + base(u.g)) / (v.length + 1));
-    const last = d[d.length - 1];
-    const basis = manual ? "직접 지정" : v.length ? `주문 ${d.length}회 기준` : "이력 부족 · 평균 적용";
+    const last = seq[seq.length - 1], fromStart = !d.length && !!last;
+    const basis = manual ? "직접 지정" : v.length ? (SC_START[u.g] ? `운영시작 포함 교체 ${v.length}회 기준` : `주문 ${d.length}회 기준`)
+      : fromStart ? `운영시작 후 미교체 · ${SC_GROUPS.find((g) => g.id === u.g).label} 평균` : "이력 부족 · 평균 적용";
     if (!last) return { ...u, size: set.size, dates: d, count: 0, cycle, status: "none", basis };
     const elapsed = scDiff(last, now), left = cycle - elapsed;
-    return { ...u, size: set.size, dates: d, count: d.length, last, elapsed, cycle, next: scAdd(last, cycle), left, basis,
+    return { ...u, size: set.size, dates: d, count: d.length, last, fromStart, elapsed, cycle, next: scAdd(last, cycle), left, basis,
       status: left <= 0 ? "due" : left <= 14 ? "soon" : "ok" };
   });
 }
@@ -4097,7 +4104,7 @@ function ScStatus({ data, now, addOrders, flash }) {
       {SC_GROUPS.map((g) => (
         <div key={g.id} className="bg-white border border-byb-line">
           <div className="px-4 py-3 border-b border-byb-line flex flex-wrap items-center justify-between gap-2">
-            <p className="text-[14px] font-bold text-slate-800">{g.label} <span className="font-normal text-xs text-slate-400">1~{g.n}번</span></p>
+            <p className="text-[14px] font-bold text-slate-800">{g.label} <span className="font-normal text-xs text-slate-400">1~{g.n}번{g.start ? ` · ${g.start.slice(2, 4)}년 ${+g.start.slice(5, 7)}월 운영 시작` : ""}</span></p>
             <div className="flex gap-3 text-[11px] text-slate-500">
               {["due", "soon", "ok"].map((s) => <span key={s} className="flex items-center gap-1"><span className={`w-2 h-2 ${SC_ST[s].bar}`} />{SC_ST[s].label}</span>)}
             </div>
@@ -4115,7 +4122,7 @@ function ScStatus({ data, now, addOrders, flash }) {
                   <p className="text-[10px] text-slate-400 truncate" title={r.size}>{r.size || "사이즈 미등록"}</p>
                   {r.last ? <>
                     <div className="h-1.5 bg-slate-100 mt-2"><div className={`h-full ${st.bar}`} style={{ width: `${pct}%` }} /></div>
-                    <div className="flex justify-between text-[11px] mt-1.5"><span className="text-slate-500">마지막 {scShort(r.last)}</span><span className="text-slate-400">{r.elapsed}일 전</span></div>
+                    <div className="flex justify-between text-[11px] mt-1.5"><span className="text-slate-500">{r.fromStart ? "운영시작" : "마지막"} {scShort(r.last)}</span><span className="text-slate-400">{r.elapsed}일 전</span></div>
                     <div className="flex justify-between text-[11px]"><span className="text-slate-500">다음 {scShort(r.next)}</span><b className={st.txt}>{scDday(r.left)}</b></div>
                     <p className="text-[10px] text-slate-400 mt-1">주기 약 {scMonths(r.cycle)}개월 · {r.basis}</p>
                   </> : <p className="text-[11px] text-slate-400 mt-2">주문 기록이 없습니다</p>}
