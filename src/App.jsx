@@ -3,7 +3,7 @@ import {
   LogIn, LogOut, Search, PackageSearch, ClipboardList, CalendarDays, Home as HomeIcon,
   Plus, X, User, Loader2, MessageSquareWarning, ArrowLeftRight, Inbox, Send, Upload,
   CheckCircle2, Clock, FileText, GraduationCap, PlayCircle, Pencil, Trash2, Copy,
-  FolderOpen, Download, RefreshCw, CalendarCheck, Menu, KeyRound
+  FolderOpen, Download, RefreshCw, CalendarCheck, Menu, KeyRound, Monitor, AlertTriangle
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
@@ -369,6 +369,7 @@ export default function App() {
     { id: "lessonbyb", label: "강습 등록·취소", icon: GraduationCap },
     { id: "stats", label: "월간 이용 통계", icon: Search },
     { id: "saunakey", label: "사우나 핸드키", icon: KeyRound },
+    { id: "screen", label: "스크린천 주문", icon: Monitor },
     ...(isOffice ? [{ id: "officelog", label: "사무실 업무일지", icon: ClipboardList }] : []),
     { id: "link", label: "외부 연동", icon: ArrowLeftRight },
   ];
@@ -429,6 +430,7 @@ export default function App() {
             {tab === "officelog" && isOffice && <OfficeLog me={me} />}
             {tab === "link" && <LinkInfo />}
             {tab === "saunakey" && <SaunaKeys />}
+            {tab === "screen" && <ScreenCloth />}
           </div>
         </main>
       </div>
@@ -3849,6 +3851,430 @@ function SaunaKeys() {
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════ 스크린천 주문 관리 (GDR 타석 1~14 · 스크린룸 1~5) ═══════════
+   주문 기록·타석별 사이즈/교체주기는 settings 표(key: screen_orders)에 JSON 으로 저장 → 별도 SQL 필요 없음
+   교체주기 = 타석별 주문 간격 평균(그룹 평균을 한 번 더 섞어 이력이 적을 때 튀지 않게), 이력 없으면 그룹/전체 평균 */
+const SC_KEY = "screen_orders";
+const SC_GROUPS = [{ id: "gdr", label: "GDR 타석", n: 14 }, { id: "room", label: "스크린룸", n: 5 }];
+const scName = (g, no) => (g === "gdr" ? `${no}번타석` : `스크린룸 ${no}번`);
+const SC_UNITS = SC_GROUPS.flatMap((g) => Array.from({ length: g.n }, (_, i) => ({ key: `${g.id}-${i + 1}`, g: g.id, no: i + 1, name: scName(g.id, i + 1) })));
+const SC_UNIT = Object.fromEntries(SC_UNITS.map((u, i) => [u.key, { ...u, idx: i }]));
+const SC_L2 = " (좌암2숏)";
+const SC_DEFAULT_SIZE = {
+  "gdr-1": "3680 x 3130 + 230 (3숏)", "gdr-2": "3680 x 3130 + 230" + SC_L2, "gdr-3": "3180 x 3130 + 230" + SC_L2,
+  ...Object.fromEntries([4, 5, 6, 7, 8, 9, 10, 11, 12, 13].map((n) => [`gdr-${n}`, "2680 x 3130 + 230" + SC_L2])),
+  "gdr-14": "2480 x 3130 + 230" + SC_L2,
+  "room-1": "5020 x 3000 + 320 (3숏)", "room-2": "", "room-3": "4960 x 3000 + 320 (3숏)",
+  "room-4": "4970 x 3000 + 320 (3숏)", "room-5": "4960 x 3000 + 320 (3숏)",
+};
+// 넘버원스크린천 문자 내역 (2025.10 ~ 2026.10) — 처음 열 때 한 번만 저장됨
+const SC_SEED = [
+  ["2025-10-10", "gdr", [6, 8, 10]], ["2025-10-14", "gdr", [7]], ["2025-10-22", "gdr", [12]], ["2025-11-18", "gdr", [5]],
+  ["2025-11-27", "gdr", [14]], ["2025-12-06", "gdr", [13]], ["2026-02-11", "gdr", [2, 9, 10]], ["2026-02-19", "gdr", [11]],
+  ["2026-02-21", "gdr", [6, 8]], ["2026-02-24", "gdr", [7]], ["2026-03-04", "gdr", [1, 3, 5]], ["2026-03-25", "gdr", [12]],
+  ["2026-03-27", "gdr", [14]], ["2026-03-30", "gdr", [4]], ["2026-04-13", "gdr", [13]], ["2026-05-06", "gdr", [5, 9]],
+  ["2026-05-13", "gdr", [6, 8, 10]], ["2026-05-16", "gdr", [2, 11]], ["2026-05-18", "gdr", [7]], ["2026-06-01", "room", [1, 3, 5]],
+  ["2026-07-09", "gdr", [12]], ["2026-07-09", "room", [1]], ["2026-07-13", "gdr", [14]], ["2026-07-18", "gdr", [5]],
+  ["2026-08-04", "gdr", [3]], ["2026-08-13", "room", [4]], ["2026-08-24", "gdr", [9, 11]], ["2026-08-26", "gdr", [8]],
+  ["2026-08-31", "gdr", [6]], ["2026-09-03", "gdr", [4, 13]], ["2026-09-07", "gdr", [10]], ["2026-09-14", "gdr", [7]],
+  ["2026-09-17", "gdr", [2]], ["2026-10-12", "gdr", [14]],
+];
+const scSeed = () => ({ orders: SC_SEED.flatMap(([date, g, nos]) => nos.map((no) => ({ id: `${date}_${g}-${no}`, date, unit: `${g}-${no}`, memo: "" }))) });
+const scNorm = (v) => {
+  let o = v;
+  try { if (typeof v === "string") o = JSON.parse(v); } catch { o = null; }
+  if (!o || !Array.isArray(o.orders)) return null;
+  return {
+    orders: o.orders.filter((r) => SC_UNIT[r.unit] && /^\d{4}-\d{2}-\d{2}$/.test(r.date)),
+    units: Object.fromEntries(SC_UNITS.map((u) => [u.key, { size: SC_DEFAULT_SIZE[u.key], cycleM: "", ...(o.units?.[u.key] || {}) }])),
+  };
+};
+
+const SC_DAY = 86400e3;
+const scDiff = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / SC_DAY);
+const scAdd = (d, n) => new Date(Date.parse(d) + n * SC_DAY).toISOString().slice(0, 10);
+const scShort = (d) => `${d.slice(2, 4)}.${d.slice(5, 7)}.${d.slice(8)}`;
+const scWk = (d) => "일월화수목금토"[new Date(d).getUTCDay()];
+const scMed = (a) => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+const scMonths = (days) => (days / 30.4).toFixed(1);
+const scDday = (left) => (left === 0 ? "D-day" : left > 0 ? `D-${left}` : `${-left}일 지남`);
+const SC_ST = {
+  due: { label: "주문 필요", bar: "bg-rose-500", badge: "bg-rose-50 text-rose-600 border-rose-200", edge: "border-l-rose-500", txt: "text-rose-600" },
+  soon: { label: "곧 주문", bar: "bg-amber-400", badge: "bg-amber-50 text-amber-700 border-amber-200", edge: "border-l-amber-400", txt: "text-amber-700" },
+  ok: { label: "여유", bar: "bg-green-500", badge: "bg-green-50 text-green-700 border-green-200", edge: "border-l-green-500", txt: "text-green-700" },
+  none: { label: "이력 없음", bar: "bg-slate-300", badge: "bg-slate-50 text-slate-500 border-slate-200", edge: "border-l-slate-300", txt: "text-slate-400" },
+};
+
+function scAnalyze(data, now) {
+  const dates = {}, iv = {}, gIv = { gdr: [], room: [] };
+  SC_UNITS.forEach((u) => { dates[u.key] = []; });
+  data.orders.forEach((o) => dates[o.unit].push(o.date));
+  SC_UNITS.forEach((u) => {
+    const d = [...new Set(dates[u.key])].sort(); dates[u.key] = d;
+    iv[u.key] = d.slice(1).map((x, i) => scDiff(d[i], x));
+    gIv[u.g].push(...iv[u.key]);
+  });
+  const allMed = scMed([...gIv.gdr, ...gIv.room]) || 105;
+  const base = (g) => Math.round(gIv[g].length >= 3 ? scMed(gIv[g]) : allMed);
+  return SC_UNITS.map((u) => {
+    const d = dates[u.key], v = iv[u.key], set = data.units[u.key];
+    const manual = Number(set.cycleM) > 0;
+    const cycle = manual ? Math.round(Number(set.cycleM) * 30.4) : Math.round((v.reduce((a, b) => a + b, 0) + base(u.g)) / (v.length + 1));
+    const last = d[d.length - 1];
+    const basis = manual ? "직접 지정" : v.length ? `주문 ${d.length}회 기준` : "이력 부족 · 평균 적용";
+    if (!last) return { ...u, size: set.size, dates: d, count: 0, cycle, status: "none", basis };
+    const elapsed = scDiff(last, now), left = cycle - elapsed;
+    return { ...u, size: set.size, dates: d, count: d.length, last, elapsed, cycle, next: scAdd(last, cycle), left, basis,
+      status: left <= 0 ? "due" : left <= 14 ? "soon" : "ok" };
+  });
+}
+
+function scMessage(keys, units) {
+  const list = SC_UNITS.filter((u) => keys.includes(u.key));
+  const sz = (u) => units[u.key]?.size || "(사이즈 입력)";
+  const body = list.length === 1
+    ? `타석번호: ${list[0].g === "gdr" ? `${list[0].no}번` : list[0].name}\n사이즈: ${sz(list[0])}\n`
+    : list.map((u) => `${u.name} : ${sz(u)}`).join("\n") + "\n\n";
+  return `안녕하세요 올림픽파크포레온 2단지\n스크린천 ${list.length}장 구매요청드립니다\n\n${body}배송: 일반택배\n배송지: 양재대로 1300 올림픽파크포레온 스포츠컴플렉스 B1 안내데스크\n\n위 내용으로 부탁드립니다!`;
+}
+async function scCopy(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch {
+    const t = document.createElement("textarea"); t.value = text; document.body.appendChild(t); t.select();
+    const ok = document.execCommand("copy"); t.remove(); return ok;
+  }
+}
+
+function ScreenCloth() {
+  const [data, setData] = useState(null);
+  const [warn, setWarn] = useState("");
+  const [view, setView] = useState("status");
+  const [msg, setMsg] = useState("");
+  const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 2500); };
+
+  React.useEffect(() => {
+    let alive = true;
+    (async () => {
+      const seed = scNorm(scSeed());
+      let row = null, error = null;
+      try { ({ data: row, error } = await supabase.from("settings").select("value").eq("key", SC_KEY).maybeSingle()); }
+      catch (e) { error = e; }
+      if (!alive) return;
+      if (error) { setWarn(`서버 저장소에 연결하지 못해 이 브라우저에만 저장됩니다 (${error.message})`); setData(scNorm(lsGet(SC_KEY)) || seed); return; }
+      const cur = scNorm(row?.value);
+      if (cur) { setData(cur); return; }
+      setData(seed);
+      if (row) { setWarn("저장된 주문 기록을 읽지 못해 기본 내역을 보여줍니다."); return; }
+      let e2 = null;
+      try { ({ error: e2 } = await supabase.from("settings").upsert({ key: SC_KEY, value: JSON.stringify(seed) })); } catch (e) { e2 = e; }
+      if (e2) setWarn("기본 주문 내역 저장 실패: " + e2.message);
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const save = async (next) => {
+    setData(next);
+    try { localStorage.setItem(SC_KEY, JSON.stringify(next)); } catch { /* 무시 */ }
+    let error = null;
+    try { ({ error } = await supabase.from("settings").upsert({ key: SC_KEY, value: JSON.stringify(next) })); } catch (e) { error = e; }
+    if (error) setWarn("서버 저장 실패 (이 브라우저에는 저장됨): " + error.message);
+  };
+  const addOrders = (date, keys, memo = "") => {
+    const have = new Set(data.orders.map((o) => `${o.date}_${o.unit}`));
+    const add = keys.filter((k) => !have.has(`${date}_${k}`)).map((k) => ({ id: `${date}_${k}`, date, unit: k, memo }));
+    if (add.length) save({ ...data, orders: [...data.orders, ...add] });
+    return add.length;
+  };
+
+  if (!data) return <p className="text-sm text-slate-400 py-10 flex items-center justify-center gap-2"><Loader2 size={14} className="animate-spin" /> 불러오는 중…</p>;
+  const now = kstDay();
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex border border-byb-line bg-white">
+          {[["status", "교체 현황"], ["input", "주문 입력"]].map(([id, l]) => (
+            <button key={id} onClick={() => setView(id)}
+              className={`px-5 h-9 text-[13px] ${view === id ? "bg-emerald-600 text-white font-medium" : "text-slate-600 hover:bg-slate-50"}`}>{l}</button>
+          ))}
+        </div>
+        <p className="text-[11px] text-slate-400">거래처 넘버원스크린천 · 오늘 {scShort(now)} ({scWk(now)})</p>
+      </div>
+      {warn && <p className="text-xs text-slate-600 bg-amber-50 border border-amber-200 px-3 py-2">{warn}</p>}
+      {msg && <p className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-slate-800 text-white text-xs px-4 py-2.5">{msg}</p>}
+      {view === "status"
+        ? <ScStatus data={data} now={now} addOrders={addOrders} flash={flash} />
+        : <ScInput data={data} now={now} save={save} addOrders={addOrders} flash={flash} />}
+    </div>
+  );
+}
+
+function ScStatus({ data, now, addOrders, flash }) {
+  const rows = useMemo(() => scAnalyze(data, now), [data, now]);
+  const due = rows.filter((r) => r.status === "due").sort((a, b) => a.left - b.left);
+  const soon = rows.filter((r) => r.status === "soon").sort((a, b) => a.left - b.left);
+  const [pick, setPick] = useState(null);                 // null = '주문 필요' 전체 선택
+  const picked = pick ?? due.map((r) => r.key);
+  const toggle = (k) => setPick((p) => { const s = new Set(p ?? due.map((r) => r.key)); s.has(k) ? s.delete(k) : s.add(k); return [...s]; });
+  const nextUp = rows.filter((r) => r.status === "ok").sort((a, b) => a.left - b.left)[0];
+  const gdr = rows.filter((r) => r.g === "gdr" && r.count > 1);
+  const gdrAvg = gdr.length ? gdr.reduce((a, r) => a + r.cycle, 0) / gdr.length : 0;
+  const year = now.slice(0, 4);
+
+  const months = [];
+  {
+    const first = (data.orders.map((o) => o.date).sort()[0] || now).slice(0, 7);
+    let [y, m] = first.split("-").map(Number);
+    for (let ym = first; ym <= now.slice(0, 7); ) { months.push(ym); m++; if (m > 12) { m = 1; y++; } ym = `${y}-${pad2(m)}`; }
+  }
+  const thisYm = now.slice(0, 7);
+
+  const record = () => {
+    if (!picked.length) return alert("주문할 타석을 선택하세요.");
+    const names = SC_UNITS.filter((u) => picked.includes(u.key)).map((u) => u.name).join(", ");
+    if (!askYesNo(`오늘(${scShort(now)}) 주문한 것으로 기록할까요?\n\n${names}`)) return;
+    const n = addOrders(now, picked); setPick(null);
+    flash(n ? `오늘 주문 ${n}장 기록됨` : "이미 오늘 기록된 타석입니다");
+  };
+  const copy = async () => {
+    if (!picked.length) return alert("주문할 타석을 선택하세요.");
+    await scCopy(scMessage(picked, data.units)); flash("주문 문자 복사됨 — 넘버원스크린천 문자창에 붙여넣기");
+  };
+  const Chip = ({ r }) => {
+    const on = picked.includes(r.key);
+    return (
+      <button onClick={() => toggle(r.key)}
+        className={`flex items-center gap-1.5 border px-2.5 py-1.5 text-[12px] ${on ? "bg-white border-rose-400 text-slate-900" : "bg-white/60 border-byb-line text-slate-500"}`}>
+        <span className={`w-3.5 h-3.5 border flex items-center justify-center ${on ? "bg-rose-500 border-rose-500 text-white" : "border-slate-300"}`}>{on && <CheckCircle2 size={10} />}</span>
+        <b>{r.name}</b><span className={SC_ST[r.status].txt}>{scDday(r.left)}</span>
+      </button>
+    );
+  };
+
+  return (
+    <div className="space-y-4">
+      {due.length ? (
+        <div className="bg-rose-50 border border-rose-200 p-4">
+          <p className="text-[15px] font-bold text-rose-700 flex items-center gap-1.5"><AlertTriangle size={17} /> 오늘 주문해야 할 스크린천 {due.length}장</p>
+          <p className="text-[11px] text-rose-600/80 mt-0.5">교체주기가 지났거나 오늘인 타석입니다. 실제로 주문할 타석만 체크하세요.</p>
+          <div className="flex flex-wrap gap-1.5 mt-3">{due.map((r) => <Chip key={r.key} r={r} />)}</div>
+          {soon.length > 0 && <>
+            <p className="text-[11px] text-slate-500 mt-3 mb-1.5">같이 주문해도 되는 2주 내 예정</p>
+            <div className="flex flex-wrap gap-1.5">{soon.map((r) => <Chip key={r.key} r={r} />)}</div>
+          </>}
+          <div className="flex flex-wrap gap-2 mt-3">
+            <button onClick={copy} className="flex items-center gap-1.5 bg-slate-800 text-white text-xs px-3 py-2"><Copy size={13} /> 주문 문자 복사 ({picked.length}장)</button>
+            <button onClick={record} className="flex items-center gap-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs px-3 py-2"><CheckCircle2 size={13} /> 오늘 주문 완료로 기록</button>
+          </div>
+        </div>
+      ) : (
+        <div className="bg-green-50 border border-green-200 p-4">
+          <p className="text-[15px] font-bold text-green-700 flex items-center gap-1.5"><CheckCircle2 size={17} /> 오늘은 주문할 스크린천이 없습니다</p>
+          {soon.length > 0
+            ? <p className="text-[12px] text-amber-700 mt-1">2주 안에 주문 예정: {soon.map((r) => `${r.name} ${scShort(r.next)}(${scDday(r.left)})`).join(" · ")}</p>
+            : nextUp && <p className="text-[12px] text-slate-600 mt-1">다음 주문 예정: <b>{nextUp.name}</b> {scShort(nextUp.next)} ({scDday(nextUp.left)})</p>}
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {[
+          ["주문 필요", `${due.length}장`, "주기 지남·오늘", due.length ? "text-rose-600" : "text-slate-900"],
+          ["2주 내 주문", `${soon.length}장`, "14일 안에 주기 도래", soon.length ? "text-amber-600" : "text-slate-900"],
+          [`${year}년 주문`, `${data.orders.filter((o) => o.date.startsWith(year)).length}장`, `전체 ${data.orders.length}장 기록`, "text-slate-900"],
+          ["GDR 평균 교체주기", gdrAvg ? `${scMonths(gdrAvg)}개월` : "-", gdrAvg ? `약 ${Math.round(gdrAvg)}일` : "이력 부족", "text-slate-900"],
+        ].map(([l, v, f, c]) => (
+          <div key={l} className="bg-white border border-byb-line px-3 py-2.5">
+            <p className="text-[11px] text-slate-500">{l}</p><p className={`text-xl font-bold mt-0.5 ${c}`}>{v}</p><p className="text-[11px] text-slate-400 mt-0.5">{f}</p>
+          </div>
+        ))}
+      </div>
+
+      {SC_GROUPS.map((g) => (
+        <div key={g.id} className="bg-white border border-byb-line">
+          <div className="px-4 py-3 border-b border-byb-line flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[14px] font-bold text-slate-800">{g.label} <span className="font-normal text-xs text-slate-400">1~{g.n}번</span></p>
+            <div className="flex gap-3 text-[11px] text-slate-500">
+              {["due", "soon", "ok"].map((s) => <span key={s} className="flex items-center gap-1"><span className={`w-2 h-2 ${SC_ST[s].bar}`} />{SC_ST[s].label}</span>)}
+            </div>
+          </div>
+          <div className="p-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+            {rows.filter((r) => r.g === g.id).map((r) => {
+              const st = SC_ST[r.status];
+              const pct = r.last ? Math.min(100, Math.round((r.elapsed / r.cycle) * 100)) : 0;
+              return (
+                <div key={r.key} className={`border border-byb-line border-l-4 ${st.edge} px-3 py-2.5`}>
+                  <div className="flex items-center justify-between gap-1">
+                    <b className="text-[16px] text-slate-900">{r.no}번</b>
+                    <span className={`text-[10px] px-1.5 py-0.5 border ${st.badge}`}>{st.label}</span>
+                  </div>
+                  <p className="text-[10px] text-slate-400 truncate" title={r.size}>{r.size || "사이즈 미등록"}</p>
+                  {r.last ? <>
+                    <div className="h-1.5 bg-slate-100 mt-2"><div className={`h-full ${st.bar}`} style={{ width: `${pct}%` }} /></div>
+                    <div className="flex justify-between text-[11px] mt-1.5"><span className="text-slate-500">마지막 {scShort(r.last)}</span><span className="text-slate-400">{r.elapsed}일 전</span></div>
+                    <div className="flex justify-between text-[11px]"><span className="text-slate-500">다음 {scShort(r.next)}</span><b className={st.txt}>{scDday(r.left)}</b></div>
+                    <p className="text-[10px] text-slate-400 mt-1">주기 약 {scMonths(r.cycle)}개월 · {r.basis}</p>
+                  </> : <p className="text-[11px] text-slate-400 mt-2">주문 기록이 없습니다</p>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+
+      <div className="bg-white border border-byb-line">
+        <p className="px-4 py-3 border-b border-byb-line text-[14px] font-bold text-slate-800">구매 이력 <span className="font-normal text-xs text-slate-400">· 동그라미 숫자 = 주문한 날(일)</span></p>
+        <div className="overflow-x-auto">
+          <table className="text-[11px] border-collapse w-full">
+            <thead>
+              <tr className="bg-byb-bg text-slate-500">
+                <th className="sticky left-0 z-10 bg-byb-bg px-3 py-2 text-left font-medium whitespace-nowrap">타석</th>
+                {months.map((ym) => <th key={ym} className={`px-1 py-2 font-medium whitespace-nowrap min-w-[2.75rem] ${ym === thisYm ? "text-emerald-600" : ""}`}>{ym.slice(2, 4)}.{ym.slice(5)}</th>)}
+                <th className="px-3 py-2 font-medium whitespace-nowrap">합계</th>
+              </tr>
+            </thead>
+            <tbody>
+              {SC_GROUPS.map((g) => (
+                <React.Fragment key={g.id}>
+                  <tr className="bg-slate-50 border-t border-byb-line"><td className="sticky left-0 bg-slate-50 px-3 py-1.5 font-bold text-slate-600 whitespace-nowrap">{g.label}</td><td colSpan={months.length + 1} /></tr>
+                  {rows.filter((r) => r.g === g.id).map((r) => (
+                    <tr key={r.key} className="border-t border-byb-line">
+                      <td className="sticky left-0 z-10 bg-white px-3 py-1.5 whitespace-nowrap font-medium text-slate-700">{r.no}번</td>
+                      {months.map((ym) => (
+                        <td key={ym} className={`text-center py-1.5 whitespace-nowrap ${ym === thisYm ? "bg-emerald-50" : ""}`}>
+                          {r.dates.filter((d) => d.startsWith(ym)).map((d) => (
+                            <span key={d} title={`${scShort(d)} 주문`} className="inline-flex items-center justify-center w-[1.35rem] h-[1.35rem] rounded-full bg-emerald-600 text-white text-[10px] font-medium mx-px">{+d.slice(8)}</span>
+                          ))}
+                        </td>
+                      ))}
+                      <td className="text-center font-bold text-slate-700">{r.count}</td>
+                    </tr>
+                  ))}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ScInput({ data, now, save, addOrders, flash }) {
+  const [date, setDate] = useState(now);
+  const [sel, setSel] = useState([]);
+  const [memo, setMemo] = useState("");
+  const [fu, setFu] = useState("");
+  const [draft, setDraft] = useState(null);
+  const auto = useMemo(() => Object.fromEntries(scAnalyze({ ...data, units: Object.fromEntries(SC_UNITS.map((u) => [u.key, { ...data.units[u.key], cycleM: "" }])) }, now).map((r) => [r.key, r.cycle])), [data, now]);
+  const toggle = (k) => setSel((s) => (s.includes(k) ? s.filter((x) => x !== k) : [...s, k]));
+
+  const submit = () => {
+    if (!date) return alert("주문 날짜를 입력하세요.");
+    if (!sel.length) return alert("타석을 하나 이상 선택하세요.");
+    const n = addOrders(date, sel, memo.trim());
+    flash(n ? `${scShort(date)} 주문 ${n}장 기록됨` : "이미 같은 날짜에 기록된 타석입니다");
+    if (n) { setSel([]); setMemo(""); }
+  };
+  const copy = async () => { if (!sel.length) return alert("타석을 선택하세요."); await scCopy(scMessage(sel, data.units)); flash("주문 문자 복사됨"); };
+  const del = (o) => {
+    if (askYesNo(`${scShort(o.date)} ${SC_UNIT[o.unit].name} 주문 기록을 삭제할까요?`)) save({ ...data, orders: data.orders.filter((x) => x.id !== o.id) });
+  };
+  const saveUnits = () => { save({ ...data, units: draft }); setDraft(null); flash("타석 설정 저장됨"); };
+
+  const list = data.orders.filter((o) => !fu || o.unit === fu);
+  const byDate = [...new Set(list.map((o) => o.date))].sort().reverse()
+    .map((d) => [d, list.filter((o) => o.date === d).sort((a, b) => SC_UNIT[a.unit].idx - SC_UNIT[b.unit].idx)]);
+  const inp = "border border-byb-line px-3 py-2 text-sm focus:outline-none focus:border-emerald-500";
+
+  return (
+    <div className="space-y-4">
+      <Panel title="주문 입력">
+        <div className="grid sm:grid-cols-[180px_1fr] gap-3">
+          <L label="주문 날짜"><input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={`${inp} w-full`} /></L>
+          <L label="메모 (선택)"><input value={memo} onChange={(e) => setMemo(e.target.value)} placeholder="예: 찢어짐, 정정 등" className={`${inp} w-full`} /></L>
+        </div>
+        {SC_GROUPS.map((g) => (
+          <div key={g.id} className="mt-4">
+            <p className="text-[11px] font-medium text-slate-500 mb-1.5">{g.label}</p>
+            <div className="flex flex-wrap gap-1.5">
+              {SC_UNITS.filter((u) => u.g === g.id).map((u) => {
+                const on = sel.includes(u.key);
+                return (
+                  <button key={u.key} onClick={() => toggle(u.key)} title={data.units[u.key].size}
+                    className={`min-w-[3.25rem] h-10 px-2 border text-[13px] ${on ? "bg-emerald-600 border-emerald-600 text-white font-bold" : "bg-white border-byb-line text-slate-700 hover:border-emerald-400"}`}>{u.no}번</button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+        {sel.length > 0 && (
+          <pre className="mt-4 bg-byb-bg border border-byb-line px-3 py-2.5 text-[12px] text-slate-700 whitespace-pre-wrap font-sans">{scMessage(sel, data.units)}</pre>
+        )}
+        <div className="flex flex-wrap gap-2 mt-4">
+          <button onClick={submit} className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[13px] font-medium px-4 py-2"><Plus size={14} /> 주문 기록 저장{sel.length ? ` (${sel.length}장)` : ""}</button>
+          <button onClick={copy} className="flex items-center gap-1.5 bg-slate-800 text-white text-[13px] px-4 py-2"><Copy size={14} /> 주문 문자 복사</button>
+          {sel.length > 0 && <button onClick={() => setSel([])} className="text-[12px] text-slate-500 px-2">선택 해제</button>}
+        </div>
+      </Panel>
+
+      <div className="bg-white border border-byb-line">
+        <div className="px-4 py-3 border-b border-byb-line flex flex-wrap items-center justify-between gap-2">
+          <p className="text-[14px] font-bold text-slate-800">주문 기록 <span className="font-normal text-xs text-slate-400">{list.length}장</span></p>
+          <select value={fu} onChange={(e) => setFu(e.target.value)} className="border border-byb-line px-2.5 py-1.5 text-xs bg-white">
+            <option value="">전체 타석</option>
+            {SC_GROUPS.map((g) => <optgroup key={g.id} label={g.label}>{SC_UNITS.filter((u) => u.g === g.id).map((u) => <option key={u.key} value={u.key}>{u.name}</option>)}</optgroup>)}
+          </select>
+        </div>
+        {!byDate.length ? <p className="text-sm text-slate-400 py-10 text-center">기록이 없습니다.</p> : (
+          <div className="max-h-[32rem] overflow-y-auto divide-y divide-byb-line">
+            {byDate.map(([d, os]) => (
+              <div key={d} className="px-4 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <span className="w-[6.5rem] text-[12px] font-medium text-slate-700 whitespace-nowrap">{scShort(d)} ({scWk(d)})</span>
+                <div className="flex flex-wrap gap-1.5 flex-1">
+                  {os.map((o) => (
+                    <span key={o.id} className={`inline-flex items-center gap-1 border pl-2 pr-1 py-0.5 text-[12px] ${o.unit.startsWith("room") ? "border-violet-200 bg-violet-50 text-violet-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`}>
+                      {SC_UNIT[o.unit].name}{o.memo && <span className="text-slate-400">· {o.memo}</span>}
+                      <button onClick={() => del(o)} title="삭제" className="text-slate-400 hover:text-rose-600"><X size={12} /></button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="bg-white border border-byb-line">
+        <button onClick={() => setDraft(draft ? null : JSON.parse(JSON.stringify(data.units)))}
+          className="w-full px-4 py-3 text-left text-[14px] font-bold text-slate-800 flex items-center justify-between">
+          타석 설정 <span className="font-normal text-xs text-slate-400">사이즈 · 교체주기 직접 지정 {draft ? "▲" : "▼"}</span>
+        </button>
+        {draft && (
+          <div className="border-t border-byb-line p-4">
+            <p className="text-[11px] text-slate-500 mb-3">교체주기를 비워두면 주문 이력으로 자동 계산합니다. 이력이 적은 타석(1번, 스크린룸)은 직접 넣어두면 알림이 정확해집니다.</p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-[12px]">
+                <thead><tr className="text-slate-500 text-left"><th className="font-medium py-1.5 pr-3">타석</th><th className="font-medium py-1.5 pr-3">사이즈 (문자에 그대로 들어감)</th><th className="font-medium py-1.5">교체주기(개월)</th></tr></thead>
+                <tbody>
+                  {SC_UNITS.map((u) => (
+                    <tr key={u.key} className="border-t border-byb-line">
+                      <td className="py-1.5 pr-3 whitespace-nowrap font-medium text-slate-700">{u.name}</td>
+                      <td className="py-1.5 pr-3"><input value={draft[u.key].size} onChange={(e) => setDraft({ ...draft, [u.key]: { ...draft[u.key], size: e.target.value } })} className="w-full min-w-[15rem] border border-byb-line px-2 py-1" placeholder="예: 4960 x 3000 + 320 (3숏)" /></td>
+                      <td className="py-1.5"><input value={draft[u.key].cycleM} onChange={(e) => setDraft({ ...draft, [u.key]: { ...draft[u.key], cycleM: e.target.value.replace(/[^0-9.]/g, "") } })} className="w-24 border border-byb-line px-2 py-1" placeholder={`자동 ${scMonths(auto[u.key])}`} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex gap-2 mt-3">
+              <button onClick={saveUnits} className="bg-emerald-600 hover:bg-emerald-700 text-white text-[13px] font-medium px-4 py-2">설정 저장</button>
+              <button onClick={() => setDraft(null)} className="text-[12px] text-slate-500 px-2">취소</button>
+            </div>
           </div>
         )}
       </div>
