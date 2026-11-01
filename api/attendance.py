@@ -1102,6 +1102,261 @@ def sauna_memos(auth, items):
     return res
 
 
+
+# ───────────── 사우나 핸드키 고장 보고서 (엑셀) ─────────────
+KEY_KIND_ORDER = ["분실", "끈·고리 파손", "고장", "기타"]
+KEY_KIND_COLORS = ["2A78D6", "EB6834", "1BAF7A", "EDA100"]
+
+
+def sauna_report(rows, period="", filt=""):
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.chart import BarChart, Reference
+    from openpyxl.utils import get_column_letter
+
+    FONT = "맑은 고딕"
+    NAVY, BLUE, LINE, BAND, SUB = "1B3A5C", "2468BD", "D5DBE3", "F4F7FB", "6B7785"
+    thin = Side(style="thin", color=LINE)
+    box = Border(left=thin, right=thin, top=thin, bottom=thin)
+    f = lambda sz=10, b=False, c="222222": Font(name=FONT, size=sz, bold=b, color=c)
+    fill = lambda c: PatternFill("solid", fgColor=c)
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+    def sorder(n):
+        m = re.search(r"(\d+)\s*$", n or "")
+        return (int(m.group(1)) if m else 9, 0 if "남" in (n or "") else 1, n or "")
+
+    rows = sorted(rows, key=lambda r: (r.get("date") or "9999", sorder(r.get("sauna")), int(r.get("number") or 0)))
+    saunas = sorted({r.get("sauna") or "" for r in rows}, key=sorder)
+    months = sorted({r["ym"] for r in rows if r.get("ym")})
+    rep = {}
+    for r in rows:
+        k = (r.get("sauna"), r.get("number"))
+        rep[k] = rep.get(k, 0) + 1
+    total = len(rows)
+    open_n = sum(1 for r in rows if not r.get("gone"))
+    repeat_keys = sorted([k for k, v in rep.items() if v >= 2], key=lambda k: (-rep[k], sorder(k[0]), int(k[1] or 0)))
+    today_s = (datetime.datetime.utcnow() + datetime.timedelta(hours=9)).strftime("%Y-%m-%d")
+    if not period:
+        ds = sorted(r["date"] for r in rows if r.get("date"))
+        period = f"{ds[0].replace('-', '.')} ~ {ds[-1].replace('-', '.')}" if ds else "전체"
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "요약"
+    ws.sheet_view.showGridLines = False
+    widths = {"A": 2, "B": 16, "C": 12, "D": 13, "E": 12, "F": 12, "G": 11, "H": 11, "I": 11}
+    for c, w in widths.items():
+        ws.column_dimensions[c].width = w
+
+    def cell(r, c, v=None, font=None, al=None, fl=None, bd=None, fmt=None):
+        x = ws.cell(row=r, column=c, value=v)
+        if font: x.font = font
+        if al: x.alignment = al
+        if fl: x.fill = fl
+        if bd: x.border = bd
+        if fmt: x.number_format = fmt
+        return x
+
+    def merge(r1, c1, r2, c2):
+        ws.merge_cells(start_row=r1, start_column=c1, end_row=r2, end_column=c2)
+
+    def section(r, title):
+        cell(r, 2, f"■ {title}", f(12, True, NAVY), Alignment(vertical="center"))
+        ws.row_dimensions[r].height = 24
+        return r + 1
+
+    def table(r, head, body, foot=None, first_left=True):
+        for j, h in enumerate(head):
+            cell(r, 2 + j, h, f(10, True, "FFFFFF"), center, fill(BLUE), box)
+        ws.row_dimensions[r].height = 22
+        for i, line in enumerate(body):
+            for j, v in enumerate(line):
+                cell(r + 1 + i, 2 + j, v, f(10), left if (j == 0 and first_left) else center,
+                     fill(BAND) if i % 2 else None, box, "#,##0" if isinstance(v, int) else None)
+            ws.row_dimensions[r + 1 + i].height = 20
+        end = r + len(body)
+        if foot:
+            end += 1
+            top = Border(left=thin, right=thin, bottom=thin, top=Side(style="medium", color=NAVY))
+            for j, v in enumerate(foot):
+                cell(end, 2 + j, v, f(10, True, NAVY), center, fill("E8EEF6"), top, "#,##0" if isinstance(v, int) else None)
+            ws.row_dimensions[end].height = 22
+        return end + 2
+
+    # 제목
+    cell(2, 2, "2단지 사우나 핸드키 고장 현황 보고", f(18, True, NAVY), Alignment(vertical="center"))
+    merge(2, 2, 2, 9); ws.row_dimensions[2].height = 34
+    cell(3, 2, "바이비(BYB) 사우나 핸드키 메모 기준 · 남자/여자 사우나 1·2", f(10, False, SUB))
+    merge(3, 2, 3, 9)
+    for c in range(2, 10):
+        ws.cell(row=4, column=c).border = Border(bottom=Side(style="medium", color=NAVY))
+    ws.row_dimensions[4].height = 6
+    info = [("조회 기간", period, "작성일", today_s), ("조건", filt or "전체", "기준", "메모 1줄 = 1건")]
+    for i, (a, b, c, d) in enumerate(info):
+        r = 6 + i
+        cell(r, 2, a, f(10, True, SUB), center, fill(BAND), box)
+        cell(r, 3, b, f(10), left, None, box); merge(r, 3, r, 5)
+        for cc in (4, 5):
+            ws.cell(row=r, column=cc).border = box
+        cell(r, 6, c, f(10, True, SUB), center, fill(BAND), box)
+        cell(r, 7, d, f(10), left, None, box); merge(r, 7, r, 9)
+        for cc in (8, 9):
+            ws.cell(row=r, column=cc).border = box
+        ws.row_dimensions[r].height = 20
+
+    # 1. 요약 카드
+    r = section(9, "1. 요약")
+    cards = [("총 고장 건수", total, "건", NAVY), ("미처리 (메모 있음)", open_n, "건", "C2410C"),
+             ("처리 완료 (메모 삭제)", total - open_n, "건", "15803D"), ("반복 고장 키 (2회↑)", len(repeat_keys), "개", "B91C1C")]
+    spans = [(2, 3), (4, 5), (6, 7), (8, 9)]
+    for (lab, val, unit, col), (c1, c2) in zip(cards, spans):
+        cell(r, c1, lab, f(9, True, SUB), center, fill(BAND)); merge(r, c1, r, c2)
+        cell(r + 1, c1, f"{val:,}{unit}", f(20, True, col), center); merge(r + 1, c1, r + 1, c2)
+        for rr in (r, r + 1):
+            for cc in range(c1, c2 + 1):
+                ws.cell(row=rr, column=cc).border = Border(
+                    left=thin if cc == c1 else None, right=thin if cc == c2 else None,
+                    top=thin if rr == r else None, bottom=thin if rr == r + 1 else None)
+    ws.row_dimensions[r].height = 20; ws.row_dimensions[r + 1].height = 36
+    r += 3
+
+    # 2. 사우나별 × 증상
+    r = section(r, "2. 사우나별 · 증상별 현황")
+    head = ["구분"] + KEY_KIND_ORDER + ["합계", "미처리", "비중"]
+    body = []
+    for sn in saunas:
+        rs = [x for x in rows if x.get("sauna") == sn]
+        body.append([sn] + [sum(1 for x in rs if x.get("kind") == k) for k in KEY_KIND_ORDER]
+                    + [len(rs), sum(1 for x in rs if not x.get("gone")), f"{len(rs) / total:.0%}" if total else "-"])
+    foot = ["합계"] + [sum(1 for x in rows if x.get("kind") == k) for k in KEY_KIND_ORDER] + [total, open_n, "100%" if total else "-"]
+    r = table(r, head, body, foot)
+
+    # 3. 월별 × 증상 + 차트
+    r = section(r, "3. 월별 · 증상별 추이")
+    head = ["월"] + KEY_KIND_ORDER + ["합계", "미처리"]
+    mbody = []
+    for ym in months:
+        rs = [x for x in rows if x.get("ym") == ym]
+        mbody.append([f"{ym[:4]}년 {int(ym[5:])}월"] + [sum(1 for x in rs if x.get("kind") == k) for k in KEY_KIND_ORDER]
+                     + [len(rs), sum(1 for x in rs if not x.get("gone"))])
+    nodate = [x for x in rows if not x.get("ym")]
+    if nodate:
+        mbody.append(["날짜 없음"] + [sum(1 for x in nodate if x.get("kind") == k) for k in KEY_KIND_ORDER]
+                     + [len(nodate), sum(1 for x in nodate if not x.get("gone"))])
+    mstart = r
+    r = table(r, head, mbody, foot[:6] + [open_n])
+    if months:
+        ch = BarChart()
+        ch.type, ch.grouping, ch.overlap, ch.gapWidth = "col", "stacked", 100, 60
+        ch.title = "월별 고장 건수 (증상별)"
+        ch.y_axis.title = "건"
+        ch.y_axis.majorGridlines.spPr = None
+        ch.height, ch.width = 7.2, 17.5
+        ch.legend.position = "b"
+        data = Reference(ws, min_col=3, max_col=6, min_row=mstart, max_row=mstart + len(months))
+        cats = Reference(ws, min_col=2, min_row=mstart + 1, max_row=mstart + len(months))
+        ch.add_data(data, titles_from_data=True)
+        ch.set_categories(cats)
+        for sr, colr in zip(ch.series, KEY_KIND_COLORS):
+            sr.graphicalProperties.solidFill = colr
+            sr.graphicalProperties.line.solidFill = "FFFFFF"
+        ch.y_axis.delete = False
+        ch.x_axis.delete = False
+        ws.add_chart(ch, f"B{r}")
+        r += 16
+
+    # 4. 반복 고장 키
+    r = section(r, "4. 반복 고장 핸드키 (2회 이상)")
+    if repeat_keys:
+        body = []
+        for k in repeat_keys:
+            rs = [x for x in rows if (x.get("sauna"), x.get("number")) == k]
+            last = max((x.get("date") or "" for x in rs), default="")
+            kinds = ", ".join(f"{kk} {sum(1 for x in rs if x.get('kind') == kk)}" for kk in KEY_KIND_ORDER
+                              if any(x.get("kind") == kk for x in rs))
+            body.append([k[0], f"{k[1]}번", rep[k], last.replace("-", ".") if last else "-",
+                         "미처리" if any(not x.get("gone") for x in rs) else "처리 완료", kinds])
+        r0 = r
+        r = table(r, ["사우나", "키 번호", "건수", "최근 접수", "상태", "증상 내역"], body)
+        for i in range(len(body) + 1):
+            ws.merge_cells(start_row=r0 + i, start_column=7, end_row=r0 + i, end_column=9)
+    else:
+        cell(r, 2, "해당 없음", f(10, False, SUB)); r += 2
+    cell(r, 2, "※ 처리 상태는 바이비 메모가 지워진 건을 '처리 완료'로 추정한 값입니다.", f(9, False, SUB))
+    cell(r + 1, 2, "※ 증상은 메모 문구의 단어로 자동 분류되며, 세부 내용은 [상세 내역] 시트의 메모 원문을 참고하세요.", f(9, False, SUB))
+
+    ws.page_setup.orientation = "portrait"
+    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    ws.page_setup.fitToWidth, ws.page_setup.fitToHeight = 1, 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.print_options.horizontalCentered = True
+    ws.page_margins.left = ws.page_margins.right = 0.4
+    ws.page_margins.top = ws.page_margins.bottom = 0.5
+
+    # 상세 내역
+    d = wb.create_sheet("상세 내역")
+    d.sheet_view.showGridLines = False
+    cols = [("No", 6), ("접수일", 11), ("사우나", 11), ("키 번호", 8), ("동-호", 11), ("이름", 9),
+            ("증상", 12), ("메모 원문", 44), ("처리 상태", 11), ("같은 키 누적", 10)]
+    for j, (_, w) in enumerate(cols):
+        d.column_dimensions[get_column_letter(j + 1)].width = w
+    d.cell(row=1, column=1, value="사우나 핸드키 고장 상세 내역").font = f(14, True, NAVY)
+    d.cell(row=2, column=1, value=f"조회 기간 {period} · 조건 {filt or '전체'} · 총 {total}건 · 작성일 {today_s}").font = f(9, False, SUB)
+    d.row_dimensions[1].height = 26
+    for j, (h, _) in enumerate(cols):
+        x = d.cell(row=4, column=j + 1, value=h)
+        x.font, x.alignment, x.fill, x.border = f(10, True, "FFFFFF"), center, fill(BLUE), box
+    d.row_dimensions[4].height = 22
+    kind_fill = dict(zip(KEY_KIND_ORDER, ["E3EEFB", "FDE9DF", "DDF4EA", "FDF1D6"]))
+    for i, rr in enumerate(rows):
+        rn = 5 + i
+        dt = None
+        if rr.get("date"):
+            try:
+                dt = datetime.datetime.strptime(rr["date"], "%Y-%m-%d").date()
+            except ValueError:
+                dt = rr["date"]
+        gone = bool(rr.get("gone"))
+        vals = [i + 1, dt, rr.get("sauna"), int(rr.get("number") or 0), rr.get("dongho") or "-", rr.get("name") or "-",
+                rr.get("kind"), rr.get("line"), "처리 완료" if gone else "미처리", rep.get((rr.get("sauna"), rr.get("number")), 1)]
+        for j, v in enumerate(vals):
+            x = d.cell(row=rn, column=j + 1, value=v)
+            x.font = f(10, False, "9AA3AE" if gone and j != 8 else "222222")
+            x.alignment = left if j == 7 else center
+            x.border = box
+            if i % 2:
+                x.fill = fill("F8FAFC")
+        d.cell(row=rn, column=2).number_format = "yyyy-mm-dd"
+        d.cell(row=rn, column=4).number_format = '0"번"'
+        kc = d.cell(row=rn, column=7)
+        if not gone:
+            kc.fill = fill(kind_fill.get(rr.get("kind"), "F1F3F5"))
+        sc = d.cell(row=rn, column=9)
+        sc.font = f(10, True, "9AA3AE" if gone else "C2410C")
+        if not gone:
+            sc.fill = fill("FFF1E6")
+        nc = d.cell(row=rn, column=10)
+        nc.number_format = '0"회"'
+        if (nc.value or 0) >= 2:
+            nc.font = f(10, True, "B91C1C")
+    last_row = 4 + len(rows)
+    d.freeze_panes = "A5"
+    if rows:
+        d.auto_filter.ref = f"A4:J{last_row}"
+    d.print_title_rows = "4:4"
+    d.page_setup.orientation = "landscape"
+    d.page_setup.paperSize = d.PAPERSIZE_A4
+    d.page_setup.fitToWidth, d.page_setup.fitToHeight = 1, 0
+    d.sheet_properties.pageSetUpPr.fitToPage = True
+    d.page_margins.left = d.page_margins.right = 0.4
+    d.oddFooter.center.text = "&P / &N 페이지"
+
+    bio = io.BytesIO()
+    wb.save(bio)
+    return bio.getvalue()
+
 def make_auth(tok, user):
     a, kind = pick_auth(tok)
     return encode_auth({"a": a, "k": kind, "u": user, "r": tok.get("refresh_token"), "t": tok.get("access_token")})
@@ -1169,6 +1424,10 @@ def handle(b):
         z = build_zip(data, int(b["year"]), int(b["month"]),
                       [int(x) for x in b.get("holidays", [])], b.get("skipEmpty", True))
         return {"zip": base64.b64encode(z).decode(), "log": LOG[-200:]}
+
+    if act == "sauna_report":    # 사우나 핸드키 고장 보고서 엑셀 (로그인 불필요)
+        x = sauna_report(b.get("rows") or [], b.get("period") or "", b.get("filter") or "")
+        return {"xlsx": base64.b64encode(x).decode()}
 
     auth = decode_auth(b.get("auth", ""))
 

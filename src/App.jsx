@@ -3722,15 +3722,20 @@ function SaunaKeys() {
   });
   const thisYm = kstDay().slice(0, 7);
 
-  const exportXlsx = () => {
-    const data = rows.map((r) => ({
-      접수일: r.date || "", 사우나: r.sauna, 키번호: r.number, "동-호": r.dongho, 이름: r.name, 증상: r.kind,
-      "메모 원문": r.line, 상태: r.gone ? "메모 삭제됨(처리 추정)" : "메모 있음", "같은 키 누적": repeat.get(`${r.sauna}|${r.number}`) || 1,
-    }));
-    const ws = XLSX.utils.json_to_sheet(data);
-    ws["!cols"] = [10, 10, 7, 11, 8, 12, 40, 18, 11].map((w) => ({ wch: w }));
-    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "핸드키 고장");
-    XLSX.writeFile(wb, `사우나_핸드키_고장_${fm || "전체"}_${kstDay()}.xlsx`);
+  const [xbusy, setXbusy] = useState(false);
+  const exportXlsx = async () => {
+    setXbusy(true); setErr("");
+    try {
+      const period = fm ? `${fm.slice(0, 4)}년 ${Number(fm.slice(5))}월` : "";
+      const filter = [fs || "전체 사우나", fk || "전체 증상", showGone ? "처리 완료 포함" : "미처리만"].join(" · ");
+      const j = await attCall({ action: "sauna_report", period, filter,
+        rows: rows.map(({ date, ym, sauna, number, dongho, name, kind, line, gone }) => ({ date, ym, sauna, number, dongho, name, kind, line, gone: !!gone })) });
+      const bin = Uint8Array.from(atob(j.xlsx), (c) => c.charCodeAt(0));
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([bin], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+      a.download = `사우나_핸드키_고장_보고_${fm || "전체"}_${kstDay()}.xlsx`;
+      a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    } catch (e) { setErr("엑셀 생성 실패: " + e.message); } finally { setXbusy(false); }
   };
 
   const sel = "rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs bg-white";
@@ -3814,8 +3819,9 @@ function SaunaKeys() {
             ))}
           </div>
           <label className="flex items-center gap-1 text-[11px] text-slate-500"><input type="checkbox" checked={showGone} onChange={(e) => setShowGone(e.target.checked)} /> 메모 삭제된 건 포함</label>
-          <button onClick={exportXlsx} disabled={!rows.length}
-            className="ml-auto flex items-center gap-1 rounded-lg bg-slate-800 disabled:opacity-40 text-white text-xs px-3 py-1.5"><Download size={12} /> 엑셀</button>
+          <button onClick={exportXlsx} disabled={!rows.length || xbusy}
+            className="ml-auto flex items-center gap-1 rounded-lg bg-slate-800 disabled:opacity-40 text-white text-xs px-3 py-1.5">
+            {xbusy ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />} 보고서 엑셀</button>
         </div>
         {!all.length ? (
           <p className="text-sm text-slate-400 py-10 text-center">[바이비에서 가져오기] 를 누르면 핸드키 메모를 읽어옵니다.</p>
