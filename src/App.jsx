@@ -4374,7 +4374,7 @@ function clPlan(data, today) {
 
 // 이번 주 배정: 시설마다 '해야 할 구역'을 청소 요일에 하루 한 구역씩 (밀린 것 먼저). 주가 바뀌면 자동으로 새로 배정
 const CL_WD = [["월", 1], ["화", 2], ["수", 3], ["목", 4], ["금", 5], ["토", 6], ["일", 0]];
-const CL_DAYS0 = [2, 3, 4, 5, 6, 0];   // 기본 청소 요일: 화~일 (월요일 휴관)
+const CL_DAYS0 = [2, 3, 4, 5, 6];   // 기본 청소 요일: 화~토 (월 휴관, 일요일은 방문객이 많아 지시 안 함)
 const CL_MSG = {
   head: "[클럽포레온 2단지] {날짜} 청소 구역 안내\n\n안녕하세요! 오늘 시설별로 아래 구역 청소 부탁드립니다.",
   foot: "평소 청소와 함께 위 구역 한 번 더 신경 써주세요.\n완료되면 이 방에 '완료' 남겨주시면 기록해두겠습니다. 감사합니다!",
@@ -4425,7 +4425,9 @@ function Cleaning({ me }) {
       if (!o || !Array.isArray(o.zones)) return null;
       const zones = !o.custom && o.ver !== CL_VER ? clZones() : o.zones;
       return { ver: CL_VER, custom: !!o.custom, start: o.start || today, zones, logs: Array.isArray(o.logs) ? o.logs : [],
-        days: Array.isArray(o.days) ? o.days : CL_DAYS0, plan: !o.custom && o.ver !== CL_VER ? null : o.plan || null, msg: o.msg || {} };
+        days: o.daysSet && Array.isArray(o.days) ? o.days : CL_DAYS0, daysSet: !!o.daysSet, msg: o.msg || {},
+        // 기본 구역이 바뀌었거나, 기본 요일이 바뀌었는데 직접 정한 적 없으면 이번 주 다시 배정
+        plan: (!o.custom && o.ver !== CL_VER) || (!o.daysSet && JSON.stringify(o.days) !== JSON.stringify(CL_DAYS0)) ? null : o.plan || null };
     });
   const [view, setView] = useState("week");
   const [msg, setMsg] = useState("");
@@ -4639,7 +4641,7 @@ function ClNotice({ data, save, today, flash }) {
   const toggleDay = (n) => {
     const nd = days.includes(n) ? days.filter((x) => x !== n) : [...days, n];
     if (!nd.length) return alert("청소 요일을 하루 이상 선택하세요.");
-    regen({ ...data, days: nd }); flash("청소 요일 변경 · 이번 주 재배정");
+    regen({ ...data, days: nd, daysSet: true }); flash("청소 요일 변경 · 이번 주 재배정");
   };
   const copy = async (t, label) => { await scCopy(t); flash(`${label} 문구 복사됨`); };
   const weekMsg = clWeekMsg(data);
