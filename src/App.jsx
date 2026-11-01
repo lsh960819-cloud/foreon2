@@ -307,7 +307,7 @@ function loadSession() {
     const raw = localStorage.getItem(SESSION_KEY);
     if (!raw) return null;
     const s = JSON.parse(raw);
-    if (Date.now() - s.at > SESSION_HOURS * 3600 * 1000) {
+    if (!PW_OF[s.id] || Date.now() - s.at > SESSION_HOURS * 3600 * 1000) {   // 삭제된 계정·만료 세션은 로그아웃
       localStorage.removeItem(SESSION_KEY);
       return null;
     }
