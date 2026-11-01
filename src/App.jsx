@@ -379,7 +379,7 @@ export default function App() {
   const go = (id) => { setTab(id); setNav(false); };
 
   return (
-    <div className="min-h-screen bg-byb-bg text-byb-text">
+    <div className="min-h-screen bg-byb-bg bg-cover bg-center bg-fixed text-byb-text" style={{ backgroundImage: "url(/foreon-bg.jpg)" }}>
       {/* 상단 바 */}
       <header className="bg-white border-b border-byb-line sticky top-0 z-30">
         <div className="h-[50px] px-3 flex items-center justify-between">
@@ -402,7 +402,7 @@ export default function App() {
 
       <div className="flex">
         {/* 왼쪽 메뉴 */}
-        <aside className={`${nav ? "block" : "hidden"} md:block fixed md:sticky top-[50px] left-0 z-20 w-[200px] shrink-0 h-[calc(100vh-50px)] overflow-y-auto bg-white border-r border-byb-line`}>
+        <aside className={`${nav ? "block" : "hidden"} md:block fixed md:sticky top-[50px] left-0 z-20 w-[200px] shrink-0 h-[calc(100vh-50px)] overflow-y-auto bg-white/85 backdrop-blur-sm border-r border-byb-line`}>
           <nav className="py-3">
             {tabs.map((t) => {
               const on = tab === t.id; const Icon = t.icon;
@@ -420,7 +420,7 @@ export default function App() {
 
         {/* 본문 */}
         <main className="flex-1 min-w-0 px-4 md:px-6 pt-6 pb-20">
-          <div className="max-w-5xl">
+          <div className="max-w-5xl bg-white/90 backdrop-blur-sm border border-white/70 shadow-sm rounded-md p-4 md:p-6">
             <h1 className="text-[22px] font-bold text-emerald-600 mb-5">{cur.label}</h1>
             {tab === "home" && <Home me={me} events={events} />}
             {tab === "attendance" && <Attendance key="att" me={me} />}
