@@ -387,8 +387,9 @@ export default function App() {
             <button onClick={() => setNav((v) => !v)} className="md:hidden w-8 h-8 flex items-center justify-center border border-byb-line text-slate-500">
               <Menu size={16} />
             </button>
-            <span className="text-[22px] font-bold tracking-tight text-emerald-600 leading-none">포레온</span>
-            <span className="text-[13px] text-slate-600">올림픽파크포레온 · 커뮤니티 운영</span>
+            <span className="text-[22px] font-bold tracking-tight text-emerald-600 leading-none">클럽포레온</span>
+            <span className="hidden sm:block w-px h-4 bg-slate-300" />
+            <span className="hidden sm:block text-[13px] font-medium text-slate-600">커뮤니티 운영관리시스템</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="flex items-center gap-1.5 h-8 px-3 border border-byb-line text-[13px]">
