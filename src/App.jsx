@@ -3871,7 +3871,7 @@ const SC_DEFAULT_SIZE = {
   "gdr-1": "3680 x 3130 + 230 (3숏)", "gdr-2": "3680 x 3130 + 230" + SC_L2, "gdr-3": "3180 x 3130 + 230" + SC_L2,
   ...Object.fromEntries([4, 5, 6, 7, 8, 9, 10, 11, 12, 13].map((n) => [`gdr-${n}`, "2680 x 3130 + 230" + SC_L2])),
   "gdr-14": "2480 x 3130 + 230" + SC_L2,
-  "room-1": "5020 x 3000 + 320 (3숏)", "room-2": "", "room-3": "4960 x 3000 + 320 (3숏)",
+  "room-1": "5020 x 3000 + 320 (3숏)", "room-2": "4960 x 3000 + 320 (3숏)", "room-3": "4960 x 3000 + 320 (3숏)",
   "room-4": "4970 x 3000 + 320 (3숏)", "room-5": "4960 x 3000 + 320 (3숏)",
 };
 // 넘버원스크린천 문자 내역 (2025.10 ~ 2026.10) — 처음 열 때 한 번만 저장됨
@@ -3893,7 +3893,7 @@ const scNorm = (v) => {
   if (!o || !Array.isArray(o.orders)) return null;
   return {
     orders: o.orders.filter((r) => SC_UNIT[r.unit] && /^\d{4}-\d{2}-\d{2}$/.test(r.date)),
-    units: Object.fromEntries(SC_UNITS.map((u) => [u.key, { size: SC_DEFAULT_SIZE[u.key], cycleM: "", ...(o.units?.[u.key] || {}) }])),
+    units: Object.fromEntries(SC_UNITS.map((u) => { const x = o.units?.[u.key] || {}; return [u.key, { ...x, size: x.size || SC_DEFAULT_SIZE[u.key], cycleM: x.cycleM ?? "" }]; })),
   };
 };
 
