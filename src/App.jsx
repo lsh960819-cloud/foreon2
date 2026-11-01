@@ -3,10 +3,10 @@ import {
   LogIn, LogOut, Search, PackageSearch, ClipboardList, CalendarDays, Home as HomeIcon,
   Plus, X, User, Loader2, MessageSquareWarning, ArrowLeftRight, Inbox, Send, Upload,
   CheckCircle2, Clock, FileText, GraduationCap, PlayCircle, Pencil, Trash2, Copy,
-  FolderOpen, Download, RefreshCw, CalendarCheck, Menu
+  FolderOpen, Download, RefreshCw, CalendarCheck, Menu, KeyRound
 } from "lucide-react";
 import * as XLSX from "xlsx";
-import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
+import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
 import { supabase } from "./supabaseClient.js";
 
 /* ═══════════════════════════════════════════════════════════
@@ -368,6 +368,7 @@ export default function App() {
     { id: "reading", label: "독서실 신청서·대기자", icon: FileText },
     { id: "lessonbyb", label: "강습 등록·취소", icon: GraduationCap },
     { id: "stats", label: "월간 이용 통계", icon: Search },
+    { id: "saunakey", label: "사우나 핸드키", icon: KeyRound },
     ...(isOffice ? [{ id: "officelog", label: "사무실 업무일지", icon: ClipboardList }] : []),
     { id: "link", label: "외부 연동", icon: ArrowLeftRight },
   ];
@@ -427,6 +428,7 @@ export default function App() {
             {tab === "lessonbyb" && <Attendance key="lesson" mode="lesson" me={me} />}
             {tab === "officelog" && isOffice && <OfficeLog me={me} />}
             {tab === "link" && <LinkInfo />}
+            {tab === "saunakey" && <SaunaKeys />}
           </div>
         </main>
       </div>
@@ -3561,6 +3563,289 @@ function StatsPanel({ call }) {
       {err && <p className="text-sm text-rose-600">{err}</p>}
       {res.klass && <div><p className="text-sm font-semibold mb-1">강좌별 수강생</p><Table kind="klass" /></div>}
       {res.facility && <div><p className="text-sm font-semibold mb-1">시설별 이용자</p><Table kind="facility" /></div>}
+    </div>
+  );
+}
+
+/* ═══════════ 사우나 핸드키 고장 취합 ═══════════
+   바이비 2단지 남/여 사우나 1·2 의 락커(핸드키)별 메모를 읽어 고장건으로 분류·누적(sauna_key_issues) */
+const KEY_KINDS = [
+  ["분실", /분실|잃어|없어|미반납/],
+  ["끈·고리 파손", /끈|고리|스프링|파손|끊|부러|깨/],
+  ["고장", /고장|안\s*열|인식|작동|불량|안\s*됨|배터리|잠김|잠겨|오류|에러|먹통/],
+];
+const KIND_NAMES = [...KEY_KINDS.map((k) => k[0]), "기타"];
+const pad2 = (n) => String(n).padStart(2, "0");
+const lsGet = (k) => { try { return localStorage.getItem(k) || ""; } catch { return ""; } };
+
+function parseKeyMemo(line, sauna, number) {
+  const t = line.trim();
+  const [nowY, nowM] = kstDay().split("-").map(Number);
+  const dm = t.match(/^(\d{1,2})\s*[./월]\s*(\d{1,2})일?/);
+  const hm = t.match(/(\d{3,4})\s*[-동]\s*(\d{3,4})호?/);
+  let name = hm ? (t.slice(hm.index + hm[0].length).match(/^\s*([가-힣]{2,4})(?=\s|$)/) || [])[1] || "" : "";
+  if (KEY_KINDS.some(([, re]) => re.test(name)) || name === "키") name = "";
+  let date = "", ym = "";
+  if (dm) {
+    const m = +dm[1], d = +dm[2], y = m > nowM ? nowY - 1 : nowY;   // 이번 달보다 큰 월은 작년
+    if (m >= 1 && m <= 12) { ym = `${y}-${pad2(m)}`; date = `${ym}-${pad2(d)}`; }
+  }
+  const kind = (KEY_KINDS.find(([, re]) => re.test(t)) || ["기타"])[0];
+  return { id: `${sauna}|${number}|${t}`, sauna, number, line: t, date, ym, dongho: hm ? `${hm[1]}-${hm[2]}` : "", name, kind };
+}
+const saunaShort = (n) => String(n).replace(/^\s*\d단지\s*/, "").replace(/\s*사우나\s*/, " ").trim();
+
+function BybLoginBox({ onAuth, onClose }) {
+  const [f, setF] = useState({ step: "login", user: lsGet("byb_user"), pw: "", code: "", pending: null });
+  const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
+  const go = async () => {
+    setBusy(true); setErr("");
+    try {
+      if (f.step === "login") {
+        const j = await attCall({ action: "login", user: f.user, password: f.pw });
+        try { localStorage.setItem("byb_user", f.user); } catch {}
+        if (j.auth) { BYB_AUTH = j.auth; onAuth(); } else setF({ ...f, pw: "", step: "otp", pending: j.pending });
+      } else {
+        const j = await attCall({ action: "verify", pending: f.pending, code: f.code });
+        BYB_AUTH = j.auth; onAuth();
+      }
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  };
+  const key = (e) => e.key === "Enter" && go();
+  return (
+    <div className="bg-white border border-byb-line p-4 space-y-2">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-bold">바이비 로그인</p>
+        {onClose && <button onClick={onClose} className="text-slate-400"><X size={16} /></button>}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {f.step === "login" ? <>
+          <input value={f.user} onChange={(e) => setF({ ...f, user: e.target.value })} placeholder="바이비 아이디" className={`${attInput} flex-1 min-w-[10rem]`} />
+          <input type="password" value={f.pw} onChange={(e) => setF({ ...f, pw: e.target.value })} onKeyDown={key} placeholder="비밀번호" className={`${attInput} flex-1 min-w-[10rem]`} />
+        </> : <input value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} onKeyDown={key} placeholder="휴대폰 인증번호" autoFocus className={`${attInput} flex-1`} />}
+        <button onClick={go} disabled={busy} className="rounded-lg bg-emerald-600 disabled:opacity-50 text-white text-xs font-medium px-4">
+          {busy ? <Loader2 size={13} className="animate-spin" /> : f.step === "login" ? "로그인" : "확인"}</button>
+      </div>
+      {err && <p className="text-xs text-rose-600">{err}</p>}
+    </div>
+  );
+}
+
+function SaunaKeys() {
+  const [db, setDb] = useState([]);            // 누적 기록
+  const [dbErr, setDbErr] = useState("");
+  const [live, setLive] = useState(null);      // 이번에 가져온 {rows, unavailable, lockers}
+  const [login, setLogin] = useState(false);
+  const [prog, setProg] = useState(null);
+  const [err, setErr] = useState("");
+  const [fm, setFm] = useState("");            // 월 필터
+  const [fs, setFs] = useState("");            // 사우나 필터
+  const [fk, setFk] = useState("");            // 증상 필터
+  const [showGone, setShowGone] = useState(true);
+
+  const loadDb = React.useCallback(async () => {
+    const { data, error } = await supabase.from("sauna_key_issues").select("*");
+    if (error) { setDbErr(error.message); return null; }
+    setDbErr(""); setDb(data || []); return data || [];
+  }, []);
+  React.useEffect(() => { loadDb(); }, [loadDb]);
+
+  const fetchByb = async () => {
+    if (!BYB_AUTH) { setLogin(true); return; }
+    setErr(""); setProg({ label: "사우나·핸드키 목록 불러오는 중", done: 0, total: 0 });
+    let cur = BYB_AUTH;
+    const call = async (body) => { const j = await attCall({ ...body, auth: cur }); if (j.auth) { cur = j.auth; BYB_AUTH = j.auth; } return j; };
+    try {
+      const { saunas = [] } = await call({ action: "sauna_list" });
+      if (!saunas.length) throw new Error("바이비에서 2단지 사우나를 찾지 못했습니다.");
+      const lockers = saunas.flatMap((s) => s.lockers.map((l) => ({ ...l, s: s.id, sauna: saunaShort(s.name) })));
+      const parts = []; for (let i = 0; i < lockers.length; i += 80) parts.push(lockers.slice(i, i + 80));
+      const memos = {}; let done = 0, idx = 0;
+      setProg({ label: "핸드키 메모 읽는 중", done: 0, total: lockers.length });
+      const worker = async () => {
+        while (idx < parts.length) {
+          const p = parts[idx++];
+          const j = await call({ action: "sauna_memos", items: p.map((l) => ({ s: l.s, l: l.id })) });
+          Object.assign(memos, j.memos || {});
+          done += p.length; setProg({ label: "핸드키 메모 읽는 중", done, total: lockers.length });
+        }
+      };
+      await Promise.all([worker(), worker(), worker()]);
+      const rows = [];
+      for (const l of lockers) {
+        const memo = (memos[l.id] || "").trim();
+        if (!memo) continue;
+        memo.split(/\n|(?<=\S)\s+(?=\d{1,2}\/\d{1,2}\s)/).filter((x) => x.trim())
+          .forEach((ln) => rows.push({ ...parseKeyMemo(ln, l.sauna, l.number), status: l.status, reason: l.reason }));
+      }
+      const uniq = [...new Map(rows.map((r) => [r.id, r])).values()];
+      const unavailable = lockers.filter((l) => l.status === "UNAVAILABLE")
+        .map((l) => ({ sauna: l.sauna, number: l.number, reason: l.reason }));
+      setLive({ rows: uniq, unavailable, lockers: lockers.length, at: stamp() });
+
+      // 누적 저장: 새 건은 추가, 이미 있는 건은 확인시각 갱신, 메모에서 사라진 건은 '삭제됨'(처리된 것으로 봄)
+      if (!dbErr) {
+        const prev = new Map(db.map((r) => [r.id, r])); const at = stamp();
+        const up = uniq.map(({ status, reason, ...r }) => ({ ...r, first_seen: prev.get(r.id)?.first_seen || at, last_seen: at, gone: false }));
+        for (let i = 0; i < up.length; i += 200) {
+          const { error } = await supabase.from("sauna_key_issues").upsert(up.slice(i, i + 200));
+          if (error) throw new Error("저장 실패: " + error.message);
+        }
+        const ids = new Set(uniq.map((r) => r.id));
+        const gone = db.filter((r) => !r.gone && !ids.has(r.id)).map((r) => r.id);
+        for (let i = 0; i < gone.length; i += 100)
+          await supabase.from("sauna_key_issues").update({ gone: true, last_seen: at }).in("id", gone.slice(i, i + 100));
+        await loadDb();
+      }
+    } catch (e) {
+      setErr(e.message);
+      if (/만료|로그인 정보/.test(e.message)) BYB_AUTH = null;
+    } finally { setProg(null); }
+  };
+
+  const noTable = /sauna_key_issues|does not exist|schema cache/i.test(dbErr);
+  const all = (noTable || dbErr) ? (live?.rows || []) : db;
+  const months = [...new Set(all.map((r) => r.ym).filter(Boolean))].sort().reverse();
+  const saunas = [...new Set(all.map((r) => r.sauna))].sort();
+  const rows = all
+    .filter((r) => (!fm || r.ym === fm) && (!fs || r.sauna === fs) && (!fk || r.kind === fk) && (showGone || !r.gone))
+    .sort((a, b) => (b.date || "").localeCompare(a.date || "") || a.sauna.localeCompare(b.sauna) || a.number - b.number);
+  const kindCount = Object.fromEntries(KIND_NAMES.map((k) => [k, rows.filter((r) => r.kind === k).length]));
+  const repeat = new Map(); all.forEach((r) => { const k = `${r.sauna}|${r.number}`; repeat.set(k, (repeat.get(k) || 0) + 1); });
+
+  // 월별 × 증상 (필터: 사우나·메모삭제 포함 여부만 적용, 최근 12개월)
+  const chartBase = all.filter((r) => r.ym && (!fs || r.sauna === fs) && (showGone || !r.gone));
+  const chart = [...new Set(chartBase.map((r) => r.ym))].sort().slice(-12).map((ym) => {
+    const pt = { m: `${ym.slice(2, 4)}.${ym.slice(5)}` };
+    KIND_NAMES.forEach((k) => { pt[k] = chartBase.filter((r) => r.ym === ym && r.kind === k).length; });
+    return pt;
+  });
+  const thisYm = kstDay().slice(0, 7);
+
+  const exportXlsx = () => {
+    const data = rows.map((r) => ({
+      접수일: r.date || "", 사우나: r.sauna, 키번호: r.number, "동-호": r.dongho, 이름: r.name, 증상: r.kind,
+      "메모 원문": r.line, 상태: r.gone ? "메모 삭제됨(처리 추정)" : "메모 있음", "같은 키 누적": repeat.get(`${r.sauna}|${r.number}`) || 1,
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    ws["!cols"] = [10, 10, 7, 11, 8, 12, 40, 18, 11].map((w) => ({ wch: w }));
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "핸드키 고장");
+    XLSX.writeFile(wb, `사우나_핸드키_고장_${fm || "전체"}_${kstDay()}.xlsx`);
+  };
+
+  const sel = "rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs bg-white";
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="text-lg font-bold flex items-center gap-1.5"><KeyRound size={18} className="text-emerald-600" /> 사우나 핸드키 고장 취합</h2>
+          <p className="text-xs text-slate-500">바이비 2단지 남자·여자 사우나 1·2 핸드키 메모 기준{live ? ` · 마지막 조회 ${live.at} (키 ${live.lockers}개)` : ""}</p>
+        </div>
+        <button onClick={fetchByb} disabled={!!prog}
+          className="flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-medium px-3 py-2">
+          {prog ? <><Loader2 size={13} className="animate-spin" /> {prog.label}{prog.total ? ` ${prog.done}/${prog.total}` : "…"}</>
+            : <><RefreshCw size={13} /> 바이비에서 가져오기</>}
+        </button>
+      </div>
+      {login && <BybLoginBox onClose={() => setLogin(false)} onAuth={() => { setLogin(false); fetchByb(); }} />}
+      {err && <p className="text-xs text-rose-600 bg-rose-50 border border-rose-200 px-3 py-2">{err}</p>}
+      {noTable && (
+        <p className="text-xs text-slate-600 bg-amber-50 border border-amber-200 px-3 py-2">
+          누적 저장용 표(<b>sauna_key_issues</b>)가 아직 없어 이번 조회 결과만 보여줍니다. Supabase SQL 을 한 번 실행하면 메모가 지워져도 기록이 남습니다.
+        </p>
+      )}
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {[
+          ["이번 달 고장건", `${all.filter((r) => r.ym === thisYm).length}건`, `${Number(thisYm.slice(5))}월 메모 기준`],
+          ["현재 메모 있는 건", `${all.filter((r) => !r.gone).length}건`, "아직 처리 안 된 것으로 봄"],
+          ["메모 삭제된 건", `${all.filter((r) => r.gone).length}건`, "처리 완료 추정"],
+          ["바이비 사용불가 키", live ? `${live.unavailable.length}개` : "-", live ? "점검 등으로 막아둔 키" : "가져오기 후 표시"],
+        ].map(([l, v, f]) => (
+          <div key={l} className="bg-white border border-byb-line px-3 py-2.5">
+            <p className="text-[11px] text-slate-500">{l}</p><p className="text-xl font-bold text-slate-900 mt-0.5">{v}</p><p className="text-[11px] text-slate-400 mt-0.5">{f}</p>
+          </div>
+        ))}
+      </div>
+
+      {chart.length > 0 && (
+        <div className="bg-white border border-byb-line p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+            <p className="text-[13px] font-bold text-slate-800">월별·증상별 고장건 {fs && <span className="font-normal text-slate-400">· {fs}</span>}</p>
+            <div className="flex flex-wrap gap-x-3 gap-y-1">
+              {KIND_NAMES.map((k, i) => (
+                <span key={k} className="flex items-center gap-1 text-[11px] text-slate-600">
+                  <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: SERIES[i] }} />{k}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div className="h-52">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chart} margin={{ top: 8, right: 8, left: 0, bottom: 0 }} barCategoryGap="30%">
+                <CartesianGrid vertical={false} stroke="#eef0f3" />
+                <XAxis dataKey="m" tick={{ fontSize: 11, fill: "#888" }} tickLine={false} axisLine={{ stroke: "#e3e6ea" }} />
+                <YAxis tick={{ fontSize: 11, fill: "#888" }} tickLine={false} axisLine={false} allowDecimals={false} width={30} />
+                <Tooltip content={<TrendTip />} cursor={{ fill: "rgba(0,0,0,.03)" }} />
+                {KIND_NAMES.map((k, i) => (
+                  <Bar key={k} dataKey={k} name={k} stackId="a" fill={SERIES[i]} stroke="#fff" strokeWidth={1}
+                    radius={i === KIND_NAMES.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false} />
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white border border-byb-line">
+        <div className="px-3 py-2.5 border-b border-byb-line flex flex-wrap items-center gap-2">
+          <select value={fm} onChange={(e) => setFm(e.target.value)} className={sel}>
+            <option value="">전체 월</option>{months.map((m) => <option key={m} value={m}>{m.slice(0, 4)}년 {Number(m.slice(5))}월</option>)}
+          </select>
+          <select value={fs} onChange={(e) => setFs(e.target.value)} className={sel}>
+            <option value="">전체 사우나</option>{saunas.map((x) => <option key={x}>{x}</option>)}
+          </select>
+          <div className="flex flex-wrap gap-1">
+            {["", ...KIND_NAMES].map((k) => (
+              <button key={k || "all"} onClick={() => setFk(k)}
+                className={`text-[11px] px-2 py-1 border ${fk === k ? "bg-emerald-600 border-emerald-600 text-white" : "bg-white border-byb-line text-slate-600"}`}>
+                {k || "전체"}{k ? ` ${kindCount[k]}` : ` ${rows.length}`}
+              </button>
+            ))}
+          </div>
+          <label className="flex items-center gap-1 text-[11px] text-slate-500"><input type="checkbox" checked={showGone} onChange={(e) => setShowGone(e.target.checked)} /> 메모 삭제된 건 포함</label>
+          <button onClick={exportXlsx} disabled={!rows.length}
+            className="ml-auto flex items-center gap-1 rounded-lg bg-slate-800 disabled:opacity-40 text-white text-xs px-3 py-1.5"><Download size={12} /> 엑셀</button>
+        </div>
+        {!all.length ? (
+          <p className="text-sm text-slate-400 py-10 text-center">[바이비에서 가져오기] 를 누르면 핸드키 메모를 읽어옵니다.</p>
+        ) : (
+          <div className="overflow-x-auto max-h-[34rem]">
+            <table className="w-full text-[12px]">
+              <thead className="bg-byb-bg text-slate-500 sticky top-0">
+                <tr>{["접수일", "사우나", "키", "동-호", "이름", "증상", "메모 원문", "상태"].map((h) => <th key={h} className="text-left font-medium px-3 py-2 whitespace-nowrap">{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => {
+                  const rep = repeat.get(`${r.sauna}|${r.number}`) || 1;
+                  return (
+                    <tr key={r.id} className={`border-t border-byb-line ${r.gone ? "text-slate-400" : "text-slate-700"}`}>
+                      <td className="px-3 py-2 whitespace-nowrap">{r.date ? r.date.slice(5).replace("-", "/") : "-"}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{r.sauna}</td>
+                      <td className="px-3 py-2 whitespace-nowrap font-semibold">{r.number}번{rep > 1 && <span className="ml-1 text-[10px] text-rose-600 font-medium">반복 {rep}회</span>}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{r.dongho || "-"}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{r.name || "-"}</td>
+                      <td className="px-3 py-2 whitespace-nowrap"><span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm" style={{ background: SERIES[KIND_NAMES.indexOf(r.kind)] }} />{r.kind}</span></td>
+                      <td className="px-3 py-2 min-w-[14rem]">{r.line}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{r.gone ? "메모 삭제됨" : <span className="text-emerald-700 font-medium">메모 있음</span>}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

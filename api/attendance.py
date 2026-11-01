@@ -1046,6 +1046,62 @@ def facility_v3_scan(auth, y, m, page, pages, size=50):
     return {"groups": groups, "next": pg, "done": done, "total": total}
 
 
+# ───────────── 사우나 핸드키 메모 (2단지 남/여 사우나 1·2) ─────────────
+SAUNA_BASE = "/facility/manager/v2/sauna/saunas"
+
+
+def _dicts_with(js, keys):
+    out = []
+
+    def walk(o):
+        if isinstance(o, dict):
+            if all(k in o for k in keys):
+                out.append(o)
+                return
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+    walk(js)
+    return out
+
+
+def sauna_list(auth, prefix="2단지"):
+    saunas = [s for s in _dicts_with(api(auth, "GET", SAUNA_BASE), ("id", "name"))
+              if str(s.get("name", "")).replace(" ", "").startswith(prefix.replace(" ", ""))]
+    out = []
+    for s in saunas:
+        lk = _dicts_with(api(auth, "GET", f"{SAUNA_BASE}/{s['id']}/lockers"), ("id", "number"))
+        out.append({"id": s["id"], "name": s["name"], "gender": s.get("gender"),
+                    "lockers": [{"id": x["id"], "number": x["number"], "status": x.get("status"),
+                                 "reason": x.get("unavailableReason")} for x in lk]})
+    return out
+
+
+def sauna_memo(auth, sid, lid):
+    try:
+        js = api(auth, "GET", f"{SAUNA_BASE}/{sid}/lockers/{lid}/memo")
+    except BybError as e:
+        if "만료" in str(e):
+            raise
+        return ""
+    return str((js or {}).get("memo") or "") if isinstance(js, dict) else ""
+
+
+def sauna_memos(auth, items):
+    from concurrent.futures import ThreadPoolExecutor
+    items = items[:80]
+    if not items:
+        return {}
+    first = items[0]
+    res = {first["l"]: sauna_memo(auth, first["s"], first["l"])}   # 토큰 갱신은 첫 요청에서 한 번만
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        for it, memo in zip(items[1:], ex.map(lambda it: sauna_memo(auth, it["s"], it["l"]), items[1:])):
+            res[it["l"]] = memo
+    return res
+
+
 def make_auth(tok, user):
     a, kind = pick_auth(tok)
     return encode_auth({"a": a, "k": kind, "u": user, "r": tok.get("refresh_token"), "t": tok.get("access_token")})
@@ -1133,6 +1189,12 @@ def handle(b):
         return scan_stats(auth, b.get("kind"), int(b["year"]), int(b["month"]),
                           int(b.get("page") or 0), min(int(b.get("pages") or 10), 15),
                           int(b["day"]) if b.get("day") else None, min(int(b.get("size") or 100), 100))
+
+    if act == "sauna_list":      # 2단지 사우나별 락커(핸드키) 목록
+        return {"saunas": sauna_list(auth)}
+
+    if act == "sauna_memos":     # 핸드키 메모 [{s: 사우나id, l: 락커id}] 최대 80개씩
+        return {"memos": sauna_memos(auth, b.get("items") or [])}
 
     if act == "windows":
         return {"windows": list_windows(auth, b.get("keywords"), b.get("year"), b.get("month"))}
