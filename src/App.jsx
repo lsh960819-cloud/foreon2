@@ -6,6 +6,7 @@ import {
   FolderOpen, Download, RefreshCw, CalendarCheck, Menu
 } from "lucide-react";
 import * as XLSX from "xlsx";
+import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
 import { supabase } from "./supabaseClient.js";
 
 /* ═══════════════════════════════════════════════════════════
@@ -959,10 +960,25 @@ function Home({ me, events }) {
   const [picked, setPicked] = useState(null);
   const [newNote, setNewNote] = useState("");
 
+  const [hist, setHist] = useState([]);        // 수강인원 일별 스냅샷 (추이 그래프용)
+  const [histErr, setHistErr] = useState("");
+
   const load = React.useCallback(async () => {
     const { data } = await supabase.from("course_stats").select("*").order("course");
     setStats(data || []);
     setLoading(false);
+    // 오늘 날짜 스냅샷 저장(하루 1줄, 덮어쓰기) → 추이 불러오기
+    const real = (data || []).filter((s) => s.synced_at);
+    if (real.length) {
+      const snap = Object.fromEntries(real.map((s) => [s.course, s.enrolled || 0]));
+      await supabase.from("course_stats_history")
+        .upsert({ snap_date: kstDay(), data: snap, at: stamp() }, { onConflict: "snap_date" });
+    }
+    const from = kstDay(-400);
+    const h = await supabase.from("course_stats_history").select("snap_date,data")
+      .gte("snap_date", from).order("snap_date");
+    if (h.error) setHistErr(h.error.message);
+    else { setHist(h.data || []); setHistErr(""); }
   }, []);
   React.useEffect(() => { load(); }, [load]);
 
@@ -1140,6 +1156,9 @@ function Home({ me, events }) {
         </div>
       )}
 
+      {/* 강좌별 수강 현황 — 종목 → 요일/시간/강사/반 → 강좌 순으로 눌러 들어가기 */}
+      <EnrollBoard stats={stats} hist={hist} histErr={histErr} loading={loading} />
+
       {/* 다가오는 행사 */}
       <div className="bg-white border border-byb-line p-5">
         <h3 className="font-bold flex items-center gap-1.5 mb-3"><CalendarDays size={17} className="text-emerald-600" /> 다가오는 행사·일정</h3>
@@ -1157,6 +1176,314 @@ function Home({ me, events }) {
           </div>
         ) : <p className="text-sm text-slate-400 py-4 text-center">예정된 행사가 없습니다.</p>}
       </div>
+    </div>
+  );
+}
+
+/* ─────────────────────── 강좌별 수강 현황 (홈) ───────────────────────
+   종목(줌바·요가·수영…) → 요일/시간/반/강사 → 개별 강좌 순으로 눌러 들어가며
+   현재 인원·정원·충원율과 추이(course_stats_history 일별 스냅샷)를 보여줍니다. */
+const kstDay = (offset = 0) => new Date(Date.now() + 9 * 3600e3 + offset * 86400e3).toISOString().slice(0, 10);
+const CAT_LABEL = { 매트: "매트필라테스", 방송: "방송댄스", 축구: "축구교실", 농구: "농구교실" };
+const SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"];
+const DIMS = [{ id: "days", label: "요일별" }, { id: "time", label: "시간별" }, { id: "lvl", label: "반별" }, { id: "teacher", label: "강사별" }];
+const ord = (arr, v) => { const i = arr.indexOf(v); return i < 0 ? 99 : i; };
+const dimSort = (d) => d === "days" ? (a, b) => ord(DAY_ORDER, a) - ord(DAY_ORDER, b)
+  : d === "time" ? (a, b) => timeMin(a) - timeMin(b)
+    : (a, b) => a.localeCompare(b, "ko", { numeric: true });
+const dimText = (d, k) => !k ? "(구분 없음)" : d === "days" ? dayLabel(k) : k;
+const shortName = (full) => String(full).replace(/^\s*\d단지\s*/, "");
+const toneOf = (en, cap) => !cap ? "none" : en >= cap ? "over" : en < Math.ceil(cap * UNDER_RATIO) ? "under" : "ok";
+
+const _parsed = new Map();
+function parseCourse(full) {
+  const s = String(full || "");
+  if (_parsed.has(s)) return _parsed.get(s);
+  const inner = (s.match(/\(([^)]*)\)/) || [, ""])[1];
+  const parts = inner.split("/").map((p) => p.trim());
+  const dtp = parts.find((p) => /^(화목|수금|월|화|수|목|금|토|일)/.test(p)) || "";
+  const dm = dtp.match(/^(화목|수금|월|화|수|목|금|토|일)(.*)$/);
+  const head = s.replace(/^\s*\d단지\s*/, "").split("(")[0].trim();
+  let sport = head, lvl = "";
+  const di = head.indexOf("-");
+  if (di > -1) { lvl = head.slice(di + 1).trim(); sport = head.slice(0, di).trim(); }
+  if (parts.length >= 3) lvl = parts[0];
+  if (/수영/.test(sport)) lvl = `${sport.replace("수영", "")} ${lvl}`.trim();   // 성인 기초, 어린이 상급…
+  const cat = LESSON_CATS.find((k) => s.includes(k === "아쿠아로빅" ? "아쿠아" : k)) || sport || "기타";
+  const r = {
+    full: s, cat, lvl, days: dm ? dm[1] : "", time: dm ? dm[2].trim() : "",
+    teacher: parts.length > 1 ? parts[parts.length - 1] : "",
+  };
+  _parsed.set(s, r);
+  return r;
+}
+
+function FillRow({ label, sub, en, cap, under, over, single, active, onClick }) {
+  const pct = cap ? Math.round((en / cap) * 100) : 0;
+  const tone = toneOf(en, cap);
+  const bar = { over: "bg-rose-500", under: "bg-amber-400", ok: "bg-emerald-600", none: "bg-slate-300" }[tone];
+  return (
+    <button onClick={onClick}
+      className={`w-full text-left px-3 py-2 border-b border-byb-line last:border-0 transition ${active ? "bg-emerald-50" : "hover:bg-slate-50"}`}>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="min-w-0 truncate">
+          <span className="text-[13px] font-medium text-slate-800">{label}</span>
+          <span className="text-[11px] text-slate-400 ml-1.5">{sub}</span>
+        </span>
+        <span className="shrink-0 text-[13px] tabular-nums">
+          <b className="text-slate-900 text-[15px]">{en}</b><span className="text-slate-400"> / {cap}명</span>
+          <span className="inline-block w-11 text-right text-slate-600 font-medium">{pct}%</span>
+        </span>
+      </div>
+      <div className="flex items-center gap-2 mt-1">
+        <div className="relative flex-1 h-2 bg-slate-100 overflow-hidden rounded-sm">
+          <div className={`h-full ${bar}`} style={{ width: `${Math.min(100, pct)}%` }} />
+          <div className="absolute top-0 bottom-0 w-px bg-white" style={{ left: `${UNDER_RATIO * 100}%` }} />
+        </div>
+        <span className="shrink-0 text-[11px] space-x-2 w-[7.5rem] text-right">
+          {single
+            ? tone === "over" ? <span className="text-rose-600 font-medium">▲ 정원 초과</span>
+              : tone === "under" ? <span className="text-amber-600 font-medium">▼ 미달 (여석 {cap - en})</span>
+                : <span className="text-slate-400">여석 {Math.max(0, cap - en)}</span>
+            : <>
+              {over > 0 && <span className="text-rose-600 font-medium">▲ 초과 {over}</span>}
+              {under > 0 && <span className="text-amber-600 font-medium">▼ 미달 {under}</span>}
+            </>}
+        </span>
+      </div>
+    </button>
+  );
+}
+
+function TrendTip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
+  const sum = payload.reduce((a, p) => a + (p.value || 0), 0);
+  return (
+    <div className="bg-white border border-byb-line px-3 py-2 text-xs shadow min-w-[9rem]">
+      <p className="font-bold text-slate-800 mb-1">{label}</p>
+      {payload.map((p) => (
+        <p key={p.dataKey} className="flex items-center gap-1.5 py-0.5">
+          <span className="inline-block w-3 h-0.5" style={{ background: p.color }} />
+          <span className="text-slate-500 truncate max-w-[10rem]">{p.name}</span>
+          <b className="ml-auto pl-3 text-slate-800">{p.value}명</b>
+        </p>
+      ))}
+      {payload.length > 1 && (
+        <p className="flex border-t border-byb-line mt-1 pt-1"><span className="text-slate-500">합계</span><b className="ml-auto text-slate-800">{sum}명</b></p>
+      )}
+    </div>
+  );
+}
+
+function EnrollBoard({ stats, hist, histErr, loading }) {
+  const [cat, setCat] = useState(null);       // 종목
+  const [dim, setDim] = useState("days");     // 2단계 분류 기준
+  const [key, setKey] = useState(null);       // 2단계 선택값 (예: 화목)
+  const [course, setCourse] = useState(null); // 개별 강좌
+  const [period, setPeriod] = useState("day"); // day | month
+
+  const rows = useMemo(() => stats
+    .filter((s) => s.synced_at || s.enrolled)   // 특이사항만 적어둔 빈 줄 제외
+    .map((s) => ({ ...parseCourse(s.course), enrolled: s.enrolled || 0, cap: capacityOf(s.course) })), [stats]);
+
+  const agg = (list) => ({
+    en: list.reduce((a, r) => a + r.enrolled, 0),
+    cap: list.reduce((a, r) => a + r.cap, 0),
+    n: list.length,
+    under: list.filter((r) => toneOf(r.enrolled, r.cap) === "under").length,
+    over: list.filter((r) => toneOf(r.enrolled, r.cap) === "over").length,
+  });
+  const groupBy = (list, fn, sort) => {
+    const m = new Map();
+    for (const r of list) { const k = fn(r); if (!m.has(k)) m.set(k, []); m.get(k).push(r); }
+    return [...m.entries()].sort((a, b) => sort(a[0], b[0])).map(([k, l]) => ({ k, list: l, ...agg(l) }));
+  };
+
+  const inCat = cat ? rows.filter((r) => r.cat === cat) : rows;
+  const dims = cat ? DIMS.filter((d) => new Set(inCat.map((r) => r[d.id] || "")).size > 1) : [];
+  const curDim = dims.some((d) => d.id === dim) ? dim : (dims[0]?.id || "days");
+  const inKey = key === null ? inCat : inCat.filter((r) => (r[curDim] || "") === key);
+  const showCourses = !!cat && (key !== null || !dims.length);
+  const catName = cat ? (CAT_LABEL[cat] || cat) : "";
+
+  const items = !cat
+    ? groupBy(rows, (r) => r.cat, (a, b) => ord(LESSON_CATS, a) - ord(LESSON_CATS, b))
+      .map((g) => ({ ...g, label: CAT_LABEL[g.k] || g.k, sub: `강좌 ${g.n}개` }))
+    : !showCourses
+      ? groupBy(inCat, (r) => r[curDim] || "", dimSort(curDim))
+        .map((g) => ({ ...g, label: dimText(curDim, g.k), sub: `강좌 ${g.n}개` }))
+      : [...inKey].sort((a, b) => ord(DAY_ORDER, a.days) - ord(DAY_ORDER, b.days) || timeMin(a.time) - timeMin(b.time)
+        || a.full.localeCompare(b.full, "ko"))
+        .map((r) => ({ k: r.full, list: [r], ...agg([r]), single: true, label: shortName(r.full),
+          sub: [dayLabel(r.days), r.time, r.lvl, r.teacher].filter(Boolean).join(" · ") }));
+
+  const pickItem = (it) => {
+    if (!cat) { setCat(it.k); setKey(null); setCourse(null); }
+    else if (!showCourses) { setKey(it.k); setCourse(null); }
+    else setCourse(course === it.k ? null : it.k);
+  };
+
+  const scope = course ? inKey.filter((r) => r.full === course) : inKey;
+  const sum = agg(scope);
+  const scopeName = course ? shortName(course)
+    : key !== null ? `${catName} ${dimText(curDim, key)}` : cat ? catName : "전체 강좌";
+
+  /* 추이 — 이름으로 분류하므로 강좌명이 바뀐 과거 기록도 종목·요일별 합계에 포함됩니다 */
+  const inScope = (p) => (!cat || p.cat === cat) && (key === null || (p[curDim] || "") === key);
+  let series;
+  if (course) series = [{ name: shortName(course), test: (p) => p.full === course }];
+  else if (!cat) series = [{ name: "전체 수강생", test: () => true }];
+  else {
+    const kids = items.map((it) => ({
+      name: it.label,
+      test: showCourses ? (p) => p.full === it.k : (p) => p.cat === cat && (p[curDim] || "") === it.k,
+    }));
+    series = kids.length >= 2 && kids.length <= SERIES.length ? kids : [{ name: scopeName, test: inScope }];
+  }
+  const tooMany = !course && cat && items.length > SERIES.length;
+
+  const snaps = period === "day"
+    ? hist.filter((h) => h.snap_date >= kstDay(-60))
+    : [...hist.reduce((m, h) => m.set(h.snap_date.slice(0, 7), h), new Map()).values()];  // 월말(마지막 기록) 기준
+  const points = snaps.map((h) => {
+    const pt = { d: period === "day" ? h.snap_date.slice(5).replace("-", "/") : `${h.snap_date.slice(2, 4)}.${h.snap_date.slice(5, 7)}` };
+    series.forEach((s, i) => { pt[`s${i}`] = 0; });
+    for (const [name, n] of Object.entries(h.data || {})) {
+      const p = parseCourse(name);
+      series.forEach((s, i) => { if (s.test(p)) pt[`s${i}`] += Number(n) || 0; });
+    }
+    pt.total = series.reduce((a, _, i) => a + pt[`s${i}`], 0);
+    return pt;
+  });
+  const delta = points.length >= 2 ? points.at(-1).total - points.at(-2).total : null;
+  const noTable = /course_stats_history|does not exist|schema cache/i.test(histErr);
+
+  const crumbs = [
+    { label: "전체", go: () => { setCat(null); setKey(null); setCourse(null); } },
+    cat && { label: catName, go: () => { setKey(null); setCourse(null); } },
+    key !== null && { label: dimText(curDim, key), go: () => setCourse(null) },
+    course && { label: shortName(course), go: () => {} },
+  ].filter(Boolean);
+
+  const pct = sum.cap ? Math.round((sum.en / sum.cap) * 100) : 0;
+  const kpis = [
+    { label: "현재 수강생", value: `${sum.en.toLocaleString()}명`,
+      foot: delta === null ? "추이 기록 대기" : `${period === "day" ? "직전 기록" : "전월"} 대비 ${delta > 0 ? "+" : ""}${delta}명` },
+    { label: "정원", value: `${sum.cap.toLocaleString()}명`, foot: `여석 ${Math.max(0, sum.cap - sum.en)}명` },
+    { label: "충원율", value: `${pct}%`, foot: `미달 기준 ${UNDER_RATIO * 100}%` },
+    { label: "강좌 수", value: `${sum.n}개`, foot: `미달 ${sum.under} · 초과 ${sum.over}` },
+  ];
+
+  return (
+    <div className="bg-white border border-byb-line">
+      <div className="px-4 py-3 border-b border-byb-line flex flex-wrap items-center justify-between gap-2">
+        <h3 className="font-bold text-[14px] text-slate-800 flex items-center gap-1.5">
+          <GraduationCap size={16} className="text-emerald-600" /> 강좌별 수강 현황
+        </h3>
+        <nav className="flex flex-wrap items-center gap-1 text-[12px]">
+          {crumbs.map((c, i) => (
+            <React.Fragment key={i}>
+              {i > 0 && <span className="text-slate-300">›</span>}
+              <button onClick={c.go} disabled={i === crumbs.length - 1}
+                className={i === crumbs.length - 1 ? "font-bold text-slate-800" : "text-emerald-700 hover:underline"}>{c.label}</button>
+            </React.Fragment>
+          ))}
+        </nav>
+      </div>
+
+      {loading ? <p className="text-sm text-slate-400 py-10 text-center">불러오는 중…</p>
+        : !rows.length ? <p className="text-sm text-slate-400 py-10 text-center">아직 수강인원 자료가 없습니다 — [수강인원 업데이트] 를 눌러주세요.</p>
+          : (
+            <div className="p-4 space-y-4">
+              {/* 선택 범위 요약 */}
+              <div>
+                <p className="text-[12px] text-slate-500 mb-1.5"><b className="text-slate-800">{scopeName}</b> 기준</p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {kpis.map((k) => (
+                    <div key={k.label} className="border border-byb-line px-3 py-2.5">
+                      <p className="text-[11px] text-slate-500">{k.label}</p>
+                      <p className="text-xl font-bold text-slate-900 mt-0.5 tabular-nums">{k.value}</p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">{k.foot}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid lg:grid-cols-2 gap-4">
+                {/* 목록 — 눌러서 한 단계씩 들어가기 */}
+                <div className="border border-byb-line">
+                  <div className="px-3 py-2 bg-byb-bg border-b border-byb-line flex flex-wrap items-center gap-1.5">
+                    <span className="text-[12px] font-bold text-slate-700 mr-1">
+                      {!cat ? "종목별" : showCourses ? "강좌별" : `${catName} · ${DIMS.find((d) => d.id === curDim)?.label}`}
+                    </span>
+                    {cat && key === null && dims.map((d) => (
+                      <button key={d.id} onClick={() => setDim(d.id)}
+                        className={`text-[11px] px-2 py-0.5 border ${curDim === d.id ? "bg-emerald-600 border-emerald-600 text-white" : "bg-white border-byb-line text-slate-600 hover:border-emerald-300"}`}>{d.label}</button>
+                    ))}
+                    <span className="ml-auto text-[11px] text-slate-400">{showCourses ? "누르면 그래프에 표시" : "누르면 세부 보기"}</span>
+                  </div>
+                  <div className="max-h-[32rem] overflow-y-auto">
+                    {items.map((it) => (
+                      <FillRow key={it.k} label={it.label} sub={it.sub} en={it.en} cap={it.cap} under={it.under} over={it.over}
+                        single={it.single} active={course === it.k} onClick={() => pickItem(it)} />
+                    ))}
+                  </div>
+                </div>
+
+                {/* 추이 그래프 */}
+                <div className="border border-byb-line p-3 flex flex-col">
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <p className="text-[12px] font-bold text-slate-700">수강생 추이 <span className="font-normal text-slate-400">· {scopeName}</span></p>
+                    <div className="flex border border-byb-line text-[11px]">
+                      {[["day", "일별"], ["month", "월별"]].map(([id, lb]) => (
+                        <button key={id} onClick={() => setPeriod(id)}
+                          className={`px-2.5 py-1 ${period === id ? "bg-emerald-600 text-white" : "bg-white text-slate-600"}`}>{lb}</button>
+                      ))}
+                    </div>
+                  </div>
+                  {series.length > 1 && (
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 mb-2">
+                      {series.map((s, i) => (
+                        <span key={i} className="flex items-center gap-1 text-[11px] text-slate-600">
+                          <span className="inline-block w-3 h-[3px] rounded-full" style={{ background: SERIES[i] }} />{s.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {noTable ? (
+                    <p className="text-xs text-slate-500 bg-byb-bg p-3 my-auto leading-relaxed">
+                      추이를 저장할 표(<b>course_stats_history</b>)가 아직 없습니다.<br />Supabase SQL Editor 에서 생성 SQL 을 한 번 실행해주세요.
+                    </p>
+                  ) : !points.length ? (
+                    <p className="text-xs text-slate-400 text-center my-auto py-10">아직 쌓인 기록이 없습니다.</p>
+                  ) : (
+                    <>
+                      <div className="h-56">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <LineChart data={points} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+                            <CartesianGrid vertical={false} stroke="#eef0f3" />
+                            <XAxis dataKey="d" tick={{ fontSize: 11, fill: "#888" }} tickLine={false} axisLine={{ stroke: "#e3e6ea" }} minTickGap={16} />
+                            <YAxis tick={{ fontSize: 11, fill: "#888" }} tickLine={false} axisLine={false} allowDecimals={false} width={36} />
+                            <Tooltip content={<TrendTip />} cursor={{ stroke: "#c8ccd2", strokeDasharray: "3 3" }} />
+                            {series.map((s, i) => (
+                              <Line key={i} type="linear" dataKey={`s${i}`} name={s.name} stroke={SERIES[i]} strokeWidth={2}
+                                dot={points.length <= 14 ? { r: 3, strokeWidth: 2, stroke: "#fff", fill: SERIES[i] } : false}
+                                activeDot={{ r: 5, strokeWidth: 2, stroke: "#fff" }} isAnimationActive={false} />
+                            ))}
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        {points.length < 2 ? "기록이 쌓이면 추이가 그려집니다 · " : ""}
+                        홈 화면을 열 때마다 그날 인원이 자동 저장됩니다{period === "month" ? " (월별 = 그 달 마지막 기록)" : " (최근 60일)"}
+                        {tooMany ? " · 항목이 많아 합계만 표시 — 목록을 눌러 좁혀보세요" : ""}
+                      </p>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
     </div>
   );
 }
