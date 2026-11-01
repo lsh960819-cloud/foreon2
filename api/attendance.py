@@ -272,7 +272,7 @@ def _list_windows_kw(auth, chans, kw, out, seen):
             title = find_title(it)
             if wid and title and wid not in seen:
                 seen.add(wid)
-                out.append({"id": wid, "name": class_name_from_row(title) or title,
+                out.append({"id": wid, "name": class_name_from_row(title) or title, "label": pretty_name(title),
                             "price": it.get("price"), "visible": it.get("visible"),
                             "apps": it.get("monthlyRepetitionNumberOfApplicants") or {}})
         if len(its) < 100:
@@ -356,6 +356,12 @@ def api_to_members(items):
         if m not in out:   # 중복 제거
             out.append(m)
     return out
+
+
+def pretty_name(text):
+    """화면 표시용 강좌명: '2단지 요가 (화목07시/김수정)' → '2단지 요가(화목07시/김수정)' (슬래시 유지)"""
+    m = re.search(rf"{PRODUCT_KEYWORD}[^\t\n]*?\([^)\n]*\)", text or "")
+    return re.sub(r"\s+\(", "(", m.group(0).strip()) if m else (text or "").strip()
 
 
 def class_name_from_row(text):

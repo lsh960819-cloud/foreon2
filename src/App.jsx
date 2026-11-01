@@ -982,20 +982,87 @@ function Home({ me, events }) {
   }, []);
   React.useEffect(() => { load(); }, [load]);
 
-  React.useEffect(() => {
-    if (!job || job.status === "done" || job.status === "error") return;
-    const t = setInterval(async () => {
-      const { data } = await supabase.from("roster_jobs").select("*").eq("id", job.id).maybeSingle();
-      if (data) { setJob(data); if (data.status === "done") load(); }
-    }, 3000);
-    return () => clearInterval(t);
-  }, [job, load]);
+  /* 수강인원 업데이트 — 바이비 이번 달(KST) 창구별 확정 수강생 수를 직접 세어 course_stats 를 통째로 갱신
+     (예전 전산PC 워커 방식은 PC 프로그램이 꺼져 있으면 무한 대기 → 홈페이지 API 로 직접 처리) */
+  const [bybLogin, setBybLogin] = useState(null);   // null | {step:"login"|"otp", user, pw, code, pending}
+  const [updErr, setUpdErr] = useState("");
+  const ymKst = kstDay().slice(0, 7);
+  const curY = +ymKst.slice(0, 4), curM = +ymKst.slice(5, 7);
 
-  const requestUpdate = async () => {
-    const { data, error } = await supabase.from("roster_jobs")
-      .insert({ status: "pending", by: me.id, at: stamp() }).select().maybeSingle();
-    if (error) { alert("요청 실패: " + error.message); return; }
-    setJob(data);
+  const runUpdate = async () => {
+    if (!BYB_AUTH) { setBybLogin({ step: "login", user: (() => { try { return localStorage.getItem("byb_user") || ""; } catch { return ""; } })(), pw: "", code: "" }); return; }
+    setUpdErr(""); setJob({ status: "working", label: "강좌 목록 불러오는 중", done: 0, total: 0 });
+    let cur = BYB_AUTH;
+    const call = async (body) => {
+      const j = await attCall({ ...body, auth: cur });
+      if (j.auth) { cur = j.auth; BYB_AUTH = j.auth; }
+      return j;
+    };
+    try {
+      const { windows = [] } = await call({ action: "windows", year: curY, month: curM });
+      const ws = windows.filter((w) => !String(w.name).startsWith("플그"));
+      if (!ws.length) throw new Error("바이비에서 2단지 강좌 창구를 찾지 못했습니다.");
+      const parts = [];
+      for (let i = 0; i < ws.length; i += 15) parts.push(ws.slice(i, i + 15).map((w) => ({ id: w.id, name: w.name })));
+      const counts = {};
+      let done = 0, idx = 0;
+      setJob({ status: "working", label: `${curM}월 창구 인원 세는 중`, done: 0, total: ws.length });
+      const worker = async () => {
+        while (idx < parts.length) {
+          const p = parts[idx++];
+          const j = await call({ action: "stats_count", year: curY, month: curM, windows: p });
+          Object.assign(counts, j.counts || {});
+          done += p.length;
+          setJob({ status: "working", label: `${curM}월 창구 인원 세는 중`, done, total: ws.length });
+        }
+      };
+      await Promise.all([worker(), worker(), worker()]);
+
+      // 같은 이름 창구는 합산. 0명 창구는 앱 강좌 목록(COURSES)에 있는 것만 남김 (지난 특강·옛 창구 제외)
+      const ck = (t) => String(t).replace(/[^0-9A-Za-z가-힣]/g, "");
+      const known = new Set(ALL_COURSES.map((c) => ck(c.full)));
+      const at = stamp(), byName = new Map();
+      for (const w of ws) {
+        const n = counts[w.id] || 0;
+        if (!n && !known.has(ck(w.label || w.name))) continue;
+        const name = w.label || w.name;
+        byName.set(name, (byName.get(name) || 0) + n);
+      }
+      const rowsNew = [...byName.entries()].map(([course, enrolled]) => {
+        const p = parseCourse(course);
+        return { course, enrolled, capacity: capacityOf(course), cat: CAT_LABEL[p.cat] || p.cat,
+          floor: /수영|아쿠아/.test(course) ? "B2" : "B1", synced_at: at };
+      });
+      const up = await supabase.from("course_stats").upsert(rowsNew, { onConflict: "course" });
+      if (up.error) throw new Error("저장 실패: " + up.error.message);
+      // 이번 달 바이비에 없는 예전 강좌: 특이사항이 있으면 인원만 비우고, 없으면 삭제
+      const stale = stats.filter((s) => !byName.has(s.course));
+      const keep = stale.filter((s) => (s.note || "").trim()).map((s) => s.course);
+      const drop = stale.filter((s) => !(s.note || "").trim()).map((s) => s.course);
+      if (keep.length) await supabase.from("course_stats").update({ enrolled: 0, synced_at: null }).in("course", keep);
+      if (drop.length) await supabase.from("course_stats").delete().in("course", drop);
+      setJob({ status: "done" });
+      await load();
+    } catch (e) {
+      setJob(null);
+      setUpdErr(e.message);
+      if (/만료|로그인 정보|401|토큰/.test(e.message)) BYB_AUTH = null;
+    }
+  };
+
+  const bybStep = async () => {
+    const b = bybLogin; setUpdErr("");
+    try {
+      if (b.step === "login") {
+        const j = await attCall({ action: "login", user: b.user, password: b.pw });
+        try { localStorage.setItem("byb_user", b.user); } catch {}
+        if (j.auth) { BYB_AUTH = j.auth; setBybLogin(null); runUpdate(); }
+        else setBybLogin({ ...b, pw: "", step: "otp", pending: j.pending });
+      } else {
+        const j = await attCall({ action: "verify", pending: b.pending, code: b.code });
+        BYB_AUTH = j.auth; setBybLogin(null); runUpdate();
+      }
+    } catch (e) { setUpdErr(e.message); }
   };
 
   const saveNote = async (course, text) => {
@@ -1005,10 +1072,11 @@ function Home({ me, events }) {
     return true;
   };
 
-  const under = stats.filter(isUnder);
-  const over = stats.filter(isOver);
+  const live = stats.filter((s) => s.synced_at);
+  const under = live.filter(isUnder);
+  const over = live.filter(isOver);
   const noted = stats.filter((s) => (s.note || "").trim());
-  const synced = stats.find((s) => s.synced_at)?.synced_at;
+  const synced = live.reduce((a, s) => (s.synced_at > a ? s.synced_at : a), "");
   const upcoming = [...(events || [])]
     .filter((e) => e.date >= today()).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 5);
 
@@ -1045,16 +1113,42 @@ function Home({ me, events }) {
       <div className="flex items-start justify-between gap-2">
         <div>
           <h2 className="text-lg font-bold">안녕하세요, {me.id}님</h2>
-          <p className="text-sm text-slate-500">{today()} · {me.dept}</p>
+          <p className="text-sm text-slate-500">{kstDay()} · {me.dept}</p>
         </div>
         {isAI && (
-          <button onClick={requestUpdate} disabled={job && (job.status === "pending" || job.status === "working")}
+          <button onClick={runUpdate} disabled={job?.status === "working"}
             className="shrink-0 flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-medium px-3 py-2">
-            {job && (job.status === "pending" || job.status === "working")
-              ? <><Loader2 size={13} className="animate-spin" /> 가져오는 중…</> : "수강인원 업데이트"}
+            {job?.status === "working"
+              ? <><Loader2 size={13} className="animate-spin" /> {job.label}{job.total ? ` ${job.done}/${job.total}` : "…"}</>
+              : `수강인원 업데이트 (${curM}월 창구)`}
           </button>
         )}
       </div>
+
+      {/* 바이비 로그인 (업데이트에 필요, 새로고침 전까지 유지) */}
+      {isAI && bybLogin && (
+        <div className="bg-white border border-byb-line p-4 space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-bold">바이비 로그인 <span className="font-normal text-slate-400 text-xs">· 인원을 바이비에서 직접 가져옵니다</span></p>
+            <button onClick={() => setBybLogin(null)} className="text-slate-400"><X size={16} /></button>
+          </div>
+          {bybLogin.step === "login" ? (
+            <div className="flex flex-wrap gap-2">
+              <input value={bybLogin.user} onChange={(e) => setBybLogin({ ...bybLogin, user: e.target.value })} placeholder="바이비 아이디" className={`${attInput} flex-1 min-w-[10rem]`} />
+              <input type="password" value={bybLogin.pw} onChange={(e) => setBybLogin({ ...bybLogin, pw: e.target.value })}
+                onKeyDown={(e) => e.key === "Enter" && bybStep()} placeholder="비밀번호" className={`${attInput} flex-1 min-w-[10rem]`} />
+              <button onClick={bybStep} className="rounded-lg bg-emerald-600 text-white text-xs font-medium px-4">로그인</button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              <input value={bybLogin.code} onChange={(e) => setBybLogin({ ...bybLogin, code: e.target.value })}
+                onKeyDown={(e) => e.key === "Enter" && bybStep()} placeholder="휴대폰 인증번호" autoFocus className={`${attInput} flex-1`} />
+              <button onClick={bybStep} className="rounded-lg bg-emerald-600 text-white text-xs font-medium px-4">확인 후 업데이트</button>
+            </div>
+          )}
+        </div>
+      )}
+      {updErr && <p className="text-xs text-rose-600 bg-rose-50 border border-rose-200 px-3 py-2">업데이트 실패: {updErr}</p>}
 
       {/* 요약 카드 — 누르면 목록이 펼쳐집니다 */}
       <div className="grid grid-cols-3 gap-2">
@@ -1075,7 +1169,7 @@ function Home({ me, events }) {
         })}
       </div>
       <p className="text-[11px] text-slate-400 -mt-3">
-        {synced ? `마지막 업데이트 ${synced} · 이후 등록·취소는 자동 반영` : "아직 업데이트한 적이 없습니다"}
+        {synced ? `마지막 업데이트 ${synced} · 바이비 창구별 확정 수강생 기준` : "아직 업데이트한 적이 없습니다"}
         {!isAI && " (업데이트는 foreon4 계정)"}
       </p>
 
