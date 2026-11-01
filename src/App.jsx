@@ -4372,27 +4372,74 @@ function clPlan(data, today) {
   });
 }
 
+// 이번 주 배정: 시설마다 '해야 할 구역'을 청소 요일에 하루 한 구역씩 (밀린 것 먼저). 주가 바뀌면 자동으로 새로 배정
+const CL_WD = [["월", 1], ["화", 2], ["수", 3], ["목", 4], ["금", 5], ["토", 6], ["일", 0]];
+const CL_DAYS0 = [2, 3, 4, 5, 6, 0];   // 기본 청소 요일: 화~일 (월요일 휴관)
+const CL_MSG = {
+  head: "[클럽포레온 2단지] {날짜} 청소 구역 안내\n\n안녕하세요! 오늘 시설별로 아래 구역 청소 부탁드립니다.",
+  foot: "평소 청소와 함께 위 구역 한 번 더 신경 써주세요.\n완료되면 이 방에 '완료' 남겨주시면 기록해두겠습니다. 감사합니다!",
+};
+function clMakePlan(data, today) {
+  const W = clMon(today), days = data.days || CL_DAYS0;
+  const dates = Array.from({ length: 7 }, (_, i) => scAdd(W, i)).filter((d) => d >= today && days.includes(new Date(d).getUTCDay()));
+  const plan = clPlan(data, today), map = {};
+  if (dates.length) CL_FACS.forEach((f) => {
+    plan.filter((z) => z.fac === f.id && z.cyc > 1 && z.state === "todo")
+      .sort((a, b) => (b.late ? 1 : 0) - (a.late ? 1 : 0) || a.due.localeCompare(b.due))
+      .forEach((z, i) => { map[z.id] = dates[i % dates.length]; });
+  });
+  return { week: W, dates, map };
+}
+const clFacLines = (zones, pick) => CL_FACS.map((fac) => {
+  const zs = zones.filter((z) => z.fac === fac.id && pick(z));
+  return zs.length ? { f: fac.f, line: `- ${fac.name}: ${zs.map((z) => z.name).join(", ")}` } : null;
+}).filter(Boolean);
+function clDayMsg(data, date) {
+  const map = data.plan?.map || {}, m = { ...CL_MSG, ...(data.msg || {}) };
+  const rows = clFacLines(data.zones, (z) => map[z.id] === date);
+  const body = CL_FLOORS.map((f) => { const r = rows.filter((x) => x.f === f); return r.length ? [`■ ${f}`, ...r.map((x) => x.line)].join("\n") : ""; }).filter(Boolean);
+  const daily = clFacLines(data.zones, (z) => z.cyc <= 1);
+  if (daily.length) body.push(["■ 매일 기본 청소", ...daily.map((x) => x.line)].join("\n"));
+  return `${m.head.replaceAll("{날짜}", `${clMD(date)}(${scWk(date)})`)}\n\n${body.join("\n\n") || "오늘은 정해진 구역이 없습니다."}\n\n${m.foot}`;
+}
+function clWeekMsg(data) {
+  const p = data.plan || { dates: [], map: {} };
+  if (!p.dates?.length) return "";
+  const body = CL_FLOORS.map((f) => {
+    const r = CL_FACS.filter((x) => x.f === f).map((fac) => {
+      const parts = p.dates.map((d) => { const zs = data.zones.filter((z) => z.fac === fac.id && p.map[z.id] === d); return zs.length ? `${scWk(d)} ${zs.map((z) => z.name).join(", ")}` : null; }).filter(Boolean);
+      return parts.length ? `- ${fac.name}: ${parts.join(" / ")}` : null;
+    }).filter(Boolean);
+    return r.length ? [`■ ${f}`, ...r].join("\n") : "";
+  }).filter(Boolean);
+  return `[클럽포레온 2단지] 이번 주 청소 일정 (${clMD(p.dates[0])}~${clMD(p.dates[p.dates.length - 1])})\n\n안녕하세요! 이번 주 시설별 청소 구역 일정입니다.\n요일별 상세 안내는 당일 아침에 다시 올려드리겠습니다.\n\n${body.join("\n\n")}\n\n이번 주도 수고 많으십니다. 감사합니다!`;
+}
+
 function Cleaning({ me }) {
   const today = kstDay();
   const [data, save, warn] = useSettingJson(CL_KEY,
-    () => ({ ver: CL_VER, custom: false, start: today, zones: clZones(), logs: [] }),
+    () => ({ ver: CL_VER, custom: false, start: today, zones: clZones(), logs: [], days: CL_DAYS0, plan: null, msg: {} }),
     (v) => {
       let o = v;
       try { if (typeof v === "string") o = JSON.parse(v); } catch { o = null; }
       if (!o || !Array.isArray(o.zones)) return null;
       const zones = !o.custom && o.ver !== CL_VER ? clZones() : o.zones;
-      return { ver: CL_VER, custom: !!o.custom, start: o.start || today, zones, logs: Array.isArray(o.logs) ? o.logs : [] };
+      return { ver: CL_VER, custom: !!o.custom, start: o.start || today, zones, logs: Array.isArray(o.logs) ? o.logs : [],
+        days: Array.isArray(o.days) ? o.days : CL_DAYS0, plan: !o.custom && o.ver !== CL_VER ? null : o.plan || null, msg: o.msg || {} };
     });
   const [view, setView] = useState("week");
   const [msg, setMsg] = useState("");
   const flash = (t) => { setMsg(t); setTimeout(() => setMsg(""), 2000); };
+  React.useEffect(() => {
+    if (data && data.plan?.week !== clMon(today)) save({ ...data, plan: clMakePlan(data, today) });
+  }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!data) return <p className="text-sm text-slate-400 py-10 flex items-center justify-center gap-2"><Loader2 size={14} className="animate-spin" /> 불러오는 중…</p>;
   const W = clMon(today);
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex border border-byb-line bg-white">
-          {[["week", "이번 주 청소"], ["zones", "구역·주기 설정"], ["logs", "완료 기록"]].map(([id, l]) => (
+          {[["week", "이번 주 청소"], ["notice", "단톡방 안내"], ["zones", "구역·주기 설정"], ["logs", "완료 기록"]].map(([id, l]) => (
             <button key={id} onClick={() => setView(id)}
               className={`px-4 h-9 text-[13px] ${view === id ? "bg-emerald-600 text-white font-medium" : "text-slate-600 hover:bg-slate-50"}`}>{l}</button>
           ))}
@@ -4402,7 +4449,8 @@ function Cleaning({ me }) {
       {warn && <p className="text-xs text-slate-600 bg-amber-50 border border-amber-200 px-3 py-2">{warn}</p>}
       {msg && <p className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-slate-800 text-white text-xs px-4 py-2.5">{msg}</p>}
       {view === "week" && <ClWeek data={data} save={save} me={me} today={today} flash={flash} />}
-      {view === "zones" && <ClZones data={data} save={save} flash={flash} />}
+      {view === "notice" && <ClNotice data={data} save={save} today={today} flash={flash} />}
+      {view === "zones" && <ClZones data={data} save={save} today={today} flash={flash} />}
       {view === "logs" && <ClLogs data={data} save={save} />}
     </div>
   );
@@ -4429,6 +4477,7 @@ function ClWeek({ data, save, me, today, flash }) {
     flash(`${z.name} 완료 (${clMD(day)})`);
   };
   const order = { todo: 0, done: 1 };
+  const pmap = data.plan?.week === W ? data.plan.map : {};
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -4460,7 +4509,7 @@ function ClWeek({ data, save, me, today, flash }) {
           <p className="text-[13px] font-bold text-slate-600 mb-2">{f}</p>
           <div className="grid md:grid-cols-2 gap-3">
             {CL_FACS.filter((x) => x.f === f).map((fac) => {
-              const items = wk.filter((z) => z.fac === fac.id).sort((a, b) => order[a.state] - order[b.state] || (b.late ? 1 : 0) - (a.late ? 1 : 0));
+              const items = wk.filter((z) => z.fac === fac.id).sort((a, b) => order[a.state] - order[b.state] || (b.late ? 1 : 0) - (a.late ? 1 : 0) || (pmap[a.id] || "z").localeCompare(pmap[b.id] || "z"));
               const d = items.filter((z) => z.state === "done").length;
               const next = plan.filter((z) => z.fac === fac.id && z.state === "later").sort((a, b) => a.due.localeCompare(b.due))[0];
               return (
@@ -4472,15 +4521,15 @@ function ClWeek({ data, save, me, today, flash }) {
                   </div>
                   <div className="divide-y divide-byb-line">
                     {items.map((z) => {
-                      const on = z.state === "done";
+                      const on = z.state === "done", pd = pmap[z.id], miss = !on && pd && pd < today;
                       return (
                         <button key={z.id} onClick={() => check(z)} className="w-full flex items-center gap-2.5 px-4 py-2 text-left hover:bg-slate-50">
                           <span className={`w-[18px] h-[18px] shrink-0 border flex items-center justify-center ${on ? "bg-emerald-600 border-emerald-600 text-white" : z.late ? "border-rose-400" : "border-slate-300"}`}>
                             {on && <CheckCircle2 size={12} />}</span>
                           <span className={`flex-1 text-[13px] ${on ? "text-slate-400 line-through" : "text-slate-800"}`}>{z.name}</span>
                           <span className="text-[10px] px-1.5 py-0.5 border border-byb-line text-slate-500 whitespace-nowrap">{clCyc(z.cyc)}</span>
-                          <span className={`w-[4.5rem] text-right text-[11px] whitespace-nowrap ${on ? "text-emerald-600" : z.late ? "text-rose-600 font-medium" : "text-slate-400"}`}>
-                            {on ? `${clMD(z.last)} 완료` : z.late ? `${z.lateDays}일 밀림` : z.cyc <= 1 ? "오늘" : "이번 주"}</span>
+                          <span className={`w-[4.5rem] text-right text-[11px] whitespace-nowrap ${on ? "text-emerald-600" : z.late || miss ? "text-rose-600 font-medium" : pd === today ? "text-emerald-600 font-bold" : "text-slate-400"}`}>
+                            {on ? `${clMD(z.last)} 완료` : z.late ? `${z.lateDays}일 밀림` : z.cyc <= 1 || pd === today ? "오늘" : miss ? `${clMD(pd)} 못함` : pd ? `${clMD(pd)}(${scWk(pd)})` : "이번 주"}</span>
                         </button>
                       );
                     })}
@@ -4497,7 +4546,7 @@ function ClWeek({ data, save, me, today, flash }) {
   );
 }
 
-function ClZones({ data, save, flash }) {
+function ClZones({ data, save, today, flash }) {
   const [draft, setDraft] = useState(() => data.zones.map((z) => ({ ...z })));
   const dirty = JSON.stringify(draft) !== JSON.stringify(data.zones);
   const set = (id, k, v) => setDraft((d) => d.map((z) => (z.id === id ? { ...z, [k]: v } : z)));
@@ -4505,7 +4554,7 @@ function ClZones({ data, save, flash }) {
   const del = (z) => { if (!z.name || askYesNo(`'${z.name}' 구역을 삭제할까요? (완료 기록은 남습니다)`)) setDraft((d) => d.filter((x) => x.id !== z.id)); };
   const submit = () => {
     const zones = draft.filter((z) => z.name.trim()).map((z) => ({ ...z, name: z.name.trim() }));
-    save({ ...data, custom: true, zones }); setDraft(zones); flash("구역·주기 저장됨");
+    const next = { ...data, custom: true, zones }; save({ ...next, plan: clMakePlan(next, today) }); setDraft(zones); flash("구역·주기 저장됨 · 이번 주 재배정");
   };
   return (
     <div className="space-y-3 pb-14">
@@ -4578,6 +4627,87 @@ function ClLogs({ data, save }) {
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+function ClNotice({ data, save, today, flash }) {
+  const [edit, setEdit] = useState(null);
+  const days = data.days || CL_DAYS0;
+  const p = data.plan || { dates: [], map: {} };
+  const regen = (next) => save({ ...next, plan: clMakePlan(next, today) });
+  const toggleDay = (n) => {
+    const nd = days.includes(n) ? days.filter((x) => x !== n) : [...days, n];
+    if (!nd.length) return alert("청소 요일을 하루 이상 선택하세요.");
+    regen({ ...data, days: nd }); flash("청소 요일 변경 · 이번 주 재배정");
+  };
+  const copy = async (t, label) => { await scCopy(t); flash(`${label} 문구 복사됨`); };
+  const weekMsg = clWeekMsg(data);
+  const m = { ...CL_MSG, ...(data.msg || {}) };
+  const ta = "w-full border border-byb-line px-3 py-2 text-[12px] focus:outline-none focus:border-emerald-500";
+  return (
+    <div className="space-y-4">
+      <div className="bg-emerald-50 border border-emerald-200 px-4 py-3 text-[12px] text-slate-700 leading-relaxed">
+        <b className="text-emerald-700">카톡 예약 메시지로 자동 발송하기</b><br />
+        미화 단톡방 → 입력창 왼쪽 <b>+</b> → <b>예약 메시지</b> → 날짜·시간(예: 당일 오전 7시) 정하고 아래 요일별 문구를 붙여넣기.
+        월요일에 한 주치를 한 번에 걸어두면 매일 자동으로 올라갑니다. (PC 카톡은 채팅방 메뉴에서 예약 메시지)
+      </div>
+
+      <div className="bg-white border border-byb-line px-4 py-3 flex flex-wrap items-center gap-2">
+        <span className="text-[12px] text-slate-500 mr-1">청소 요일</span>
+        {CL_WD.map(([l, n]) => (
+          <button key={n} onClick={() => toggleDay(n)}
+            className={`w-9 h-8 border text-[12px] ${days.includes(n) ? "bg-emerald-600 border-emerald-600 text-white font-medium" : "bg-white border-byb-line text-slate-500"}`}>{l}</button>
+        ))}
+        <span className="text-[11px] text-slate-400">시설마다 하루 한 구역씩 배정 (구역이 요일보다 많으면 하루 2개)</span>
+        <button onClick={() => { if (askYesNo("오늘 이후 남은 구역을 다시 배정할까요? (완료한 구역은 빠집니다)")) { regen(data); flash("이번 주 재배정 완료"); } }}
+          className="ml-auto flex items-center gap-1 border border-byb-line text-[12px] text-slate-600 px-3 py-1.5 hover:bg-slate-50"><RefreshCw size={12} /> 다시 배정</button>
+      </div>
+
+      {weekMsg && (
+        <div className="bg-white border border-byb-line">
+          <div className="px-4 py-2.5 border-b border-byb-line flex items-center justify-between gap-2">
+            <b className="text-[14px] text-slate-800">이번 주 전체 일정 <span className="font-normal text-xs text-slate-400">· 월요일 공지용</span></b>
+            <button onClick={() => copy(weekMsg, "주간 일정")} className="flex items-center gap-1 bg-slate-800 text-white text-[12px] px-3 py-1.5"><Copy size={12} /> 복사</button>
+          </div>
+          <pre className="px-4 py-3 text-[12px] text-slate-700 whitespace-pre-wrap font-sans max-h-64 overflow-y-auto">{weekMsg}</pre>
+        </div>
+      )}
+
+      {!p.dates?.length ? <p className="text-sm text-slate-400 py-10 text-center bg-white border border-byb-line">이번 주에 남은 청소 요일이 없습니다.</p> : (
+        <div className="grid md:grid-cols-2 gap-3">
+          {p.dates.map((d) => {
+            const t = clDayMsg(data, d), n = Object.values(p.map).filter((x) => x === d).length;
+            return (
+              <div key={d} className={`bg-white border ${d === today ? "border-emerald-400" : "border-byb-line"}`}>
+                <div className="px-4 py-2.5 border-b border-byb-line flex items-center justify-between gap-2">
+                  <b className="text-[14px] text-slate-800">{clMD(d)} ({scWk(d)}) {d === today && <span className="text-[11px] text-emerald-600">오늘</span>}
+                    <span className="font-normal text-xs text-slate-400"> · {n}구역</span></b>
+                  <button onClick={() => copy(t, `${clMD(d)}(${scWk(d)})`)} className="flex items-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white text-[12px] px-3 py-1.5"><Copy size={12} /> 복사</button>
+                </div>
+                <pre className="px-4 py-3 text-[12px] text-slate-700 whitespace-pre-wrap font-sans max-h-72 overflow-y-auto">{t}</pre>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="bg-white border border-byb-line">
+        <button onClick={() => setEdit(edit ? null : { head: m.head, foot: m.foot })}
+          className="w-full px-4 py-3 text-left text-[14px] font-bold text-slate-800 flex items-center justify-between">
+          안내 문구 수정 <span className="font-normal text-xs text-slate-400">머리말 · 맺음말 {edit ? "▲" : "▼"}</span>
+        </button>
+        {edit && (
+          <div className="border-t border-byb-line p-4 space-y-3">
+            <L label="머리말 ({날짜} 자리에 '11/4(수)'처럼 들어갑니다)"><textarea rows={3} value={edit.head} onChange={(e) => setEdit({ ...edit, head: e.target.value })} className={ta} /></L>
+            <L label="맺음말"><textarea rows={3} value={edit.foot} onChange={(e) => setEdit({ ...edit, foot: e.target.value })} className={ta} /></L>
+            <div className="flex gap-2">
+              <button onClick={() => { save({ ...data, msg: edit }); setEdit(null); flash("안내 문구 저장됨"); }} className="bg-emerald-600 hover:bg-emerald-700 text-white text-[13px] font-medium px-4 py-2">저장</button>
+              <button onClick={() => { setEdit({ ...CL_MSG }); }} className="text-[12px] text-slate-500 px-2">기본 문구로</button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
