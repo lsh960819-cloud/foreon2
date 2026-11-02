@@ -17,11 +17,10 @@ const DEPT_OF = {
   foreon1: "사무실", foreon2: "사무실", foreon3: "사무실", foreon4: "사무실", foreon5: "사무실",
   foreon6: "데스크", foreon8: "데스크", foreon9: "데스크",
 };
-/* 개인별 비밀번호 — 사무실: Office{번호}!26 (패턴형) / 데스크: 무작위(직원끼리 유추 방지) */
-const PW_OF = {
-  foreon1: "Office1!26", foreon2: "Office2!26", foreon3: "Office3!26", foreon4: "Office4!26", foreon5: "Office5!26",
-  foreon6: "xQ4#nZt8Bw", foreon8: "Gk6&wTf1Qz", foreon9: "Rn2@Xy7Lqe",
-};
+/* 비밀번호는 코드에 두지 않습니다 — Supabase Authentication 의 사용자(아이디@foreon.local)로 로그인
+   계정 추가·비밀번호 변경·삭제: Supabase 대시보드 → Authentication → Users (DEPT_OF 에도 아이디를 넣어야 로그인됨) */
+const AUTH_DOMAIN = "foreon.local";
+const emailOf = (id) => `${id}@${AUTH_DOMAIN}`;
 const AI_ADMIN = "foreon4"; // 관리자 계정 (수강 시작 연월 선택 · 접수기간 수정 권한)
 
 const 민원카테고리 = ["시설 고장", "이용 안내", "회원 접수", "결제·환불", "기타"];
@@ -299,35 +298,33 @@ function DeletedCard({ r, label }) {
   );
 }
 
-const SESSION_KEY = "foreon2_session";
-const SESSION_HOURS = 8;
-
-function loadSession() {
-  try {
-    const raw = localStorage.getItem(SESSION_KEY);
-    if (!raw) return null;
-    const s = JSON.parse(raw);
-    if (!PW_OF[s.id] || Date.now() - s.at > SESSION_HOURS * 3600 * 1000) {   // 삭제된 계정·만료 세션은 로그아웃
-      localStorage.removeItem(SESSION_KEY);
-      return null;
-    }
-    return { id: s.id, dept: s.dept };
-  } catch { return null; }
-}
-function saveSession(me) {
-  try { localStorage.setItem(SESSION_KEY, JSON.stringify({ id: me.id, dept: me.dept, at: Date.now() })); } catch {}
-}
-function clearSession() {
-  try { localStorage.removeItem(SESSION_KEY); } catch {}
-}
+const SESSION_HOURS = 8;   // 로그인 후 8시간 지나면 다시 로그인
 
 export default function App() {
-  const [me, setMe] = useState(() => loadSession());
+  const [me, setMe] = useState(undefined);   // undefined = 확인 중, null = 로그아웃
+  React.useEffect(() => {
+    const pick = (session) => {
+      const u = session?.user, id = (u?.email || "").split("@")[0];
+      const at = Date.parse(u?.last_sign_in_at || "") || 0;
+      if (!u || !DEPT_OF[id] || Date.now() - at > SESSION_HOURS * 3600e3) {
+        if (u) setTimeout(() => supabase.auth.signOut(), 0);   // 삭제된 계정·만료 세션
+        setMe(null); return;
+      }
+      setMe((m) => (m?.id === id ? m : { id, dept: DEPT_OF[id] }));
+    };
+    supabase.auth.getSession().then(({ data }) => pick(data.session));
+    const { data } = supabase.auth.onAuthStateChange((_e, session) => pick(session));
+    return () => data.subscription.unsubscribe();
+  }, []);
+  if (me === undefined) return <div className="min-h-screen flex items-center justify-center gap-2 text-sm text-slate-400"><Loader2 size={14} className="animate-spin" /> 확인 중…</div>;
+  if (!me) return <Login />;
+  return <Main me={me} logout={() => supabase.auth.signOut()} />;
+}
+
+function Main({ me, logout }) {
   const [tab, setTab] = useState("home");
   const [nav, setNav] = useState(false);
 
-  const login = (m) => { saveSession(m); setMe(m); };
-  const logout = () => { clearSession(); setMe(null); };
 
   // 우클릭·단축키 방해 (참고: 브라우저 코드 특성상 100% 차단은 불가능합니다.
   // 마음먹은 사용자는 주소창 코드 입력 등으로 우회할 수 있어요 — 초보 접근만 늦추는 수준입니다.)
@@ -357,7 +354,6 @@ export default function App() {
   const [events, setEvents] = usePersisted("events");
   const [lost, setLost] = usePersisted("lost");
 
-  if (!me) return <Login onLogin={login} />;
   const isAI = me.id === AI_ADMIN;
 
   const tabs = [
@@ -439,14 +435,18 @@ export default function App() {
 }
 
 /* ─────────────────────── 로그인 (아이디 입력형) */
-function Login({ onLogin }) {
+function Login() {
   const [id, setId] = useState("");
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
-  const submit = () => {
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
     const key = id.trim().toLowerCase();
-    if (DEPT_OF[key] && pw === PW_OF[key]) { setErr(""); onLogin({ id: key, dept: DEPT_OF[key] }); }
-    else setErr("아이디 또는 비밀번호가 올바르지 않습니다.");
+    if (!DEPT_OF[key] || !pw) { setErr("아이디 또는 비밀번호가 올바르지 않습니다."); return; }
+    setBusy(true); setErr("");
+    const { error } = await supabase.auth.signInWithPassword({ email: emailOf(key), password: pw });
+    setBusy(false);
+    if (error) setErr(/rate|many|limit/i.test(error.message) ? "로그인 시도가 너무 많습니다. 잠시 후 다시 시도하세요." : "아이디 또는 비밀번호가 올바르지 않습니다.");
   };
   return (
     <div className="relative min-h-screen overflow-hidden bg-slate-800 flex items-center justify-center px-4">
@@ -468,7 +468,7 @@ function Login({ onLogin }) {
             <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} placeholder="비밀번호 입력"
               className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" /></label>
           {err && <p className="text-xs text-red-500">{err}</p>}
-          <button onClick={submit} className="w-full flex items-center justify-center gap-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium py-2.5 transition"><LogIn size={16} /> 로그인</button>
+          <button onClick={submit} disabled={busy} className="w-full flex items-center justify-center gap-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-sm font-medium py-2.5 transition">{busy ? <Loader2 size={16} className="animate-spin" /> : <LogIn size={16} />} 로그인</button>
           <p className="text-[11px] leading-relaxed text-slate-400 text-center">담당자에게 배정받은 계정으로 로그인하세요.</p>
         </div>
       </div>
