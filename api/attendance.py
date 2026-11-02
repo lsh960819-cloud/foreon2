@@ -1098,7 +1098,7 @@ def sauna_memos(auth, items):
         return {}
     first = items[0]
     res = {first["l"]: sauna_memo(auth, first["s"], first["l"])}   # 토큰 갱신은 첫 요청에서 한 번만
-    with ThreadPoolExecutor(max_workers=10) as ex:
+    with ThreadPoolExecutor(max_workers=3) as ex:   # 바이비 서버 배려: 동시 3개까지만
         for it, memo in zip(items[1:], ex.map(lambda it: sauna_memo(auth, it["s"], it["l"]), items[1:])):
             res[it["l"]] = memo
     return res

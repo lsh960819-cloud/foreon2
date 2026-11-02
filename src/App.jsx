@@ -1020,7 +1020,7 @@ function Home({ me, events }) {
           setJob({ status: "working", label: `${curM}월 창구 인원 세는 중`, done, total: ws.length });
         }
       };
-      await Promise.all([worker(), worker(), worker()]);
+      await worker();   // 바이비 서버 배려: 한 묶음씩 차례로 (동시 요청 최대 3개)
 
       // 같은 이름 창구는 합산. 0명 창구는 앱 강좌 목록(COURSES)에 있는 것만 남김 (지난 특강·옛 창구 제외)
       const ck = (t) => String(t).replace(/[^0-9A-Za-z가-힣]/g, "");

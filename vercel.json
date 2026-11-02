@@ -11,5 +11,8 @@
     "api/swapclass.py": {
       "maxDuration": 60
     }
-  }
+  },
+  "regions": [
+    "icn1"
+  ]
 }
