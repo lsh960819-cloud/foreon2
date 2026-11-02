@@ -3280,7 +3280,7 @@ function StatsPanel({ call }) {
 
   // 바이비가 '응답시간 초과'를 내면 한 번에 받는 건수를 줄여서(50→10) 같은 위치부터 이어서 조회
   const scan = async (action, onPart, label) => {
-    let offset = 0, size = 50, total = null, fails = 0;
+    let offset = 0, size = 100, total = null, fails = 0;   // 한 번에 100건씩 (요청 횟수 절반)
     for (let i = 0; i < 2000; i++) {
       let j;
       try { j = await call({ action, year, month, page: offset / size, size }); fails = 0; }
@@ -3312,7 +3312,7 @@ function StatsPanel({ call }) {
           const list = Object.entries(acc2).map(([title, n]) => ({ title, chan: "", n, people: n }))
             .sort((x, y) => x.title.localeCompare(y.title, "ko"));
           if (list.length) { setRes((r) => ({ ...r, klass: { list } })); return; }
-        } catch (e) { throw new Error(`강좌 조회 실패: ${e.message}`); }
+        } catch (e) { /* 바이비 [수강생 현황] 조회 방식이 바뀌어 막히면 → 아래 창구별 조회로 계속 */ }
         const { windows = [] } = await call({ action: "stats_windows" });
         const list = [];
         for (let i = 0; i < windows.length; i += 15) {

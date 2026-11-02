@@ -1016,6 +1016,8 @@ def facility_v3_scan(auth, y, m, page, pages, size=50):
     while pg < page + pages:
         if time.time() - t0 > 40:   # Vercel 60초 제한 전에 끊고 이어서
             break
+        if pg > page:
+            time.sleep(0.15)   # 바이비 서버 배려: 페이지 사이 잠깐 쉬기
         js = _post_retry(auth, f"/community/manager/v3/reservations?page={pg}&size={size}", body)
         if isinstance(js, dict):
             total = js.get("totalElements", total)
