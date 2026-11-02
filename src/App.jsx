@@ -359,7 +359,6 @@ export default function App() {
 
   if (!me) return <Login onLogin={login} />;
   const isAI = me.id === AI_ADMIN;
-  const isOffice = me.dept === "사무실";
 
   const tabs = [
     { id: "home", label: "홈", icon: HomeIcon },
@@ -371,7 +370,6 @@ export default function App() {
     { id: "saunakey", label: "사우나 핸드키", icon: KeyRound },
     { id: "screen", label: "스크린천 주문", icon: Monitor },
     { id: "cleaning", label: "시설 청소 관리", icon: Sparkles },
-    ...(isOffice ? [{ id: "officelog", label: "사무실 업무일지", icon: ClipboardList }] : []),
     { id: "link", label: "외부 연동", icon: ArrowLeftRight },
   ];
 
@@ -429,7 +427,6 @@ export default function App() {
             {tab === "reading" && <ReadingRoom />}
             {tab === "stats" && <Attendance key="stats" mode="stats" me={me} />}
             {tab === "lessonbyb" && <Attendance key="lesson" mode="lesson" me={me} />}
-            {tab === "officelog" && isOffice && <OfficeLog me={me} />}
             {tab === "link" && <LinkInfo />}
             {tab === "saunakey" && <SaunaKeys />}
             {tab === "screen" && <ScreenCloth />}
@@ -1589,7 +1586,7 @@ function EnrollBoard({ stats, hist, histErr, loading }) {
   );
 }
 
-/* 일일업무일지 자동입력 — 커뮤니티이력(A) 내용을 업무일지(B)에 채워 넣기 */
+/* 업로드 파일 → base64 */
 const fileToB64 = (file) => new Promise((res, rej) => {
   const r = new FileReader();
   r.onload = (e) => res(e.target.result.split(",")[1]);
@@ -1597,158 +1594,6 @@ const fileToB64 = (file) => new Promise((res, rej) => {
   r.readAsDataURL(file);
 });
 
-function DailyExcel({ me }) {
-  const [a, setA] = useState(null);
-  const [b, setB] = useState(null);
-  const [day, setDay] = useState(today());
-  const [job, setJob] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [open, setOpen] = useState(true);
-  const [notes, setNotes] = useState("");
-  const [saved, setSaved] = useState(null);     // { by, at }
-  const [dirty, setDirty] = useState(false);
-  const [savingNote, setSavingNote] = useState(false);
-
-  // 날짜를 바꾸면 그 날짜에 저장된 업무내용을 불러온다 (오전반이 적어둔 내용)
-  React.useEffect(() => {
-    let alive = true;
-    supabase.from("daily_notes").select("*").eq("day", day).maybeSingle()
-      .then(({ data }) => {
-        if (!alive) return;
-        setNotes(data?.text || "");
-        setSaved(data ? { by: data.by, at: data.at } : null);
-        setDirty(false);
-      });
-    return () => { alive = false; };
-  }, [day]);
-
-  const saveNotes = async () => {
-    setSavingNote(true);
-    const at = stamp();
-    const { error } = await supabase.from("daily_notes")
-      .upsert({ day, text: notes, by: me.id, at });
-    setSavingNote(false);
-    if (error) { alert("저장 실패: " + error.message); return; }
-    setSaved({ by: me.id, at });
-    setDirty(false);
-  };
-
-  React.useEffect(() => {
-    if (!job || job.status === "done" || job.status === "error") return;
-    const t = setInterval(async () => {
-      const { data } = await supabase.from("excel_jobs").select("*").eq("id", job.id).maybeSingle();
-      if (data) setJob(data);
-    }, 3000);
-    return () => clearInterval(t);
-  }, [job]);
-
-  const run = async () => {
-    if (!a || !b) { alert("커뮤니티이력(A)과 업무일지(B) 파일을 모두 선택해주세요."); return; }
-    if (dirty && !askYesNo("저장하지 않은 업무내용이 있습니다. 지금 화면의 내용으로 진행할까요?")) return;
-    setBusy(true);
-    try {
-      const [fa, fb] = await Promise.all([fileToB64(a), fileToB64(b)]);
-      const { data, error } = await supabase.from("excel_jobs").insert({
-        day, name_a: a.name, name_b: b.name, file_a: fa, file_b: fb,
-        notes,
-        status: "pending", by: me.id, at: stamp(),
-      }).select().maybeSingle();
-      if (error) throw new Error(error.message);
-      setJob(data);
-    } catch (e) {
-      alert("요청 실패: " + e.message);
-    }
-    setBusy(false);
-  };
-
-  const download = () => {
-    const bin = atob(job.result_file);
-    const buf = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-    const url = URL.createObjectURL(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
-    const link = document.createElement("a");
-    link.href = url; link.download = job.result_name || "업무일지.xlsx";
-    link.click(); URL.revokeObjectURL(url);
-  };
-
-  const running = job && (job.status === "pending" || job.status === "working");
-
-  return (
-    <div className="bg-white rounded-xl border border-slate-200 mb-4 overflow-hidden">
-      <button onClick={() => setOpen(!open)} className="w-full flex items-center justify-between px-4 py-3 hover:bg-slate-50">
-        <span className="text-sm font-semibold flex items-center gap-1.5"><FileText size={15} className="text-emerald-600" /> 일일업무일지 자동입력</span>
-        <span className="text-xs text-slate-400">{open ? "닫기" : "열기"}</span>
-      </button>
-      {open && (
-        <div className="px-4 pb-4 space-y-3 border-t border-slate-100 pt-3">
-          <p className="text-[11px] text-slate-500 leading-relaxed">
-            바이비 <b>커뮤니티이력</b> 엑셀(A)과 <b>월별 업무일지</b> 엑셀(B)을 올리면, 해당 날짜의 수입현황이 B에 채워진 새 파일을 받습니다. 원본은 변경되지 않습니다.
-          </p>
-          <label className="block">
-            <span className="text-xs font-medium text-slate-500 block mb-1">① 커뮤니티이력 엑셀 (A)</span>
-            <input type="file" accept=".xlsx,.xls" onChange={(e) => setA(e.target.files?.[0] || null)}
-              className="w-full text-xs file:mr-2 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-xs" />
-          </label>
-          <label className="block">
-            <span className="text-xs font-medium text-slate-500 block mb-1">② 업무일지 엑셀 (B) — 내용이 채워질 파일</span>
-            <input type="file" accept=".xlsx,.xlsm" onChange={(e) => setB(e.target.files?.[0] || null)}
-              className="w-full text-xs file:mr-2 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-xs" />
-          </label>
-          <label className="block">
-            <span className="text-xs font-medium text-slate-500 block mb-1">③ 처리할 날짜</span>
-            <input type="date" value={day} onChange={(e) => setDay(e.target.value)}
-              className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-emerald-500" />
-          </label>
-          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-            <span className="text-xs font-medium text-slate-600 block mb-1">④ 업무내용 (엑셀 B77~B87 칸에 그대로 입력)</span>
-            <p className="text-[11px] text-slate-400 mb-1.5">오전반이 적고 저장해두면, 오후반이 같은 날짜를 열었을 때 그대로 이어받습니다.</p>
-            <textarea rows={6} value={notes}
-              onChange={(e) => { setNotes(e.target.value); setDirty(true); }}
-              placeholder={"- 업무내용1\n- 업무내용2\n- 업무내용3"}
-              className="w-full rounded-lg border border-slate-200 p-2.5 text-sm outline-none focus:border-emerald-500 resize-none" />
-            <div className="flex items-center justify-between mt-1.5 gap-2">
-              <p className="text-[11px] text-slate-400">
-                한 줄이 한 칸 · {notes.split("\n").filter((l) => l.trim()).length}줄 (최대 11줄)
-                {saved && <span className="text-emerald-600"> · 저장됨 {saved.at} ({saved.by})</span>}
-                {dirty && <span className="text-amber-600"> · 저장 안 됨</span>}
-              </p>
-              <button onClick={saveNotes} disabled={savingNote || !dirty}
-                className="shrink-0 rounded-lg bg-slate-800 hover:bg-slate-900 disabled:opacity-40 text-white text-xs font-medium px-3 py-1.5">
-                {savingNote ? "저장 중…" : "업무내용 저장"}
-              </button>
-            </div>
-          </div>
-          <button onClick={run} disabled={busy || running}
-            className="w-full rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-sm font-medium py-2.5 flex items-center justify-center gap-1.5">
-            {busy || running ? <><Loader2 size={15} className="animate-spin" /> 처리 중… (PC 작업자 실행)</> : <><PlayCircle size={15} /> 자동 입력 실행</>}
-          </button>
-
-          {job && job.status === "error" && (
-            <p className="text-xs text-rose-600 bg-rose-50 rounded-lg p-2.5 whitespace-pre-wrap">실패: {job.error}</p>
-          )}
-          {job && job.status === "done" && (
-            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 space-y-2">
-              <p className="text-sm text-emerald-800">✔ 완료 — {job.result_name}</p>
-              <button onClick={download} className="w-full rounded-lg bg-emerald-600 text-white text-sm font-medium py-2">파일 다운로드</button>
-              {job.report && <details><summary className="text-xs text-emerald-700 cursor-pointer">검증 리포트 보기</summary>
-                <pre className="text-[10px] text-slate-600 whitespace-pre-wrap mt-1 max-h-48 overflow-auto">{job.report}</pre></details>}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ─────────────────────── 사무실 업무일지 (사무실 계정 전용) */
-function OfficeLog({ me }) {
-  return (
-    <div>
-      <h2 className="text-base font-bold mb-3">사무실 업무일지</h2>
-      <DailyExcel me={me} />
-    </div>
-  );
-}
 
 /* ─────────────────────── 강습 등록·취소 */
 /* work_logs 에 작업 기록 남기기 (강습·독서실·골프백 공통) */
